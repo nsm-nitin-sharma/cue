@@ -78,7 +78,7 @@
   - [x] Holds partial drafts cleanly when required fields (`purchase_price`, `selling_price`, `quantity`, `payment_method`) are missing
   - [x] **Weight-Never-Price Guard:** Size/weight specs (`70g`, `250 gram`) are never parsed as rupee prices or sale quantities
   - [x] **Abandon Stale Clarification on New Command:** Speaking a brand-new command or payment correction cleanly cancels stale `pending_flow` instead of hijacking the new intent
-- [x] Hinglish numbers & fractions (`pav = 0.25`, `aadha = 0.5`, `dedh = 1.5`, `dhai = 2.5`, `darjan = 12`) + unit conversion (`500g → 0.5 kg`, incompatible unit rejection)
+- [x] Hinglish numbers & fractions (`pav = 0.25`, `aadha = 0.5`, `dedh = 1.5`, `dhai = 2.5`, `darjan = 12`) + unit conversion (`piece/bottle` ↔ `packet/pouch` 1:1 countable compatibility, `500g → 0.5 kg`, incompatible cross-dimension rejection like `litre` ↔ `packet`)
 
 ---
 

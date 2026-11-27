@@ -81,6 +81,10 @@ def convert_to_base_quantity(
     if custom_conversions and norm in custom_conversions:
         return round(quantity * custom_conversions[norm], 4), None
 
+    # Discrete countable units (piece/pcs/bottle/jar <-> packet/pkt/pouch) map 1:1 unless custom-overridden
+    if {norm, base_unit} <= {"piece", "packet"}:
+        return quantity, None
+
     # Metric mass & volume conversions
     if norm == "gram" and base_unit == "kg":
         return round(quantity / 1000.0, 4), None
@@ -88,7 +92,7 @@ def convert_to_base_quantity(
         return round(quantity * 1000.0, 4), None
     if norm == "ml" and base_unit == "litre":
         return round(quantity / 1000.0, 4), None
-    if norm == "darjan" and base_unit == "piece":
+    if norm == "darjan" and base_unit in {"piece", "packet"}:
         return round(quantity * 12.0, 4), None
 
     return None, (

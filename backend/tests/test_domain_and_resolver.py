@@ -48,6 +48,12 @@ def test_unit_converter_and_incompatible_rejection():
     qty, err = convert_to_base_quantity(quantity=500, spoken_unit="gram", base_unit="kg")
     assert qty == 0.5 and err is None
 
+    # Discrete countable units (packet <-> piece) are 1:1 compatible
+    qty_p2p, err_p2p = convert_to_base_quantity(quantity=2, spoken_unit="packets", base_unit="piece")
+    assert qty_p2p == 2 and err_p2p is None
+    qty_p2pkt, err_p2pkt = convert_to_base_quantity(quantity=3, spoken_unit="pieces", base_unit="packet")
+    assert qty_p2pkt == 3 and err_p2pkt is None
+
     qty2, err2 = convert_to_base_quantity(quantity=2, spoken_unit="litre", base_unit="packet")
     assert qty2 is None and err2 is not None
 
