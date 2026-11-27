@@ -883,12 +883,20 @@ class VoicePipelineService:
                     timezone_name=tz_name,
                 )
                 replies.append(qres["reply"])
+                topic_titles = {
+                    "stock_check": "Stock Query Result",
+                    "expenses_summary": "Expenses Summary",
+                    "daily_summary": "Daily Ledger Summary",
+                    "pending_payments": "Pending Khata Dues",
+                    "customer_balance": "Customer Khata Balance",
+                    "sales_summary": "Today's Sales Summary",
+                }
                 receipts.append(
                     {
                         "id": f"slip-{sub_op_id}",
                         "operationId": sub_op_id,
                         "kind": "query",
-                        "title": "Stock Query Result" if op.query_topic == "stock_check" else "Ledger Query Result",
+                        "title": topic_titles.get(op.query_topic or "general", "Ledger Query Result"),
                         "subtitle": f"{txn_date_str} · Read-Only",
                         "transactionDate": txn_date_str,
                         "amountINR": qres["amount_inr"],

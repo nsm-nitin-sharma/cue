@@ -147,9 +147,14 @@ export default function VoiceDeskPage() {
                       </div>
                     )}
 
-                    {entry.receipt && (
-                      <ReceiptSlipCard receipt={entry.receipt} onUndo={undoReceipt} />
-                    )}
+                    {(entry.receipts && entry.receipts.length > 0
+                      ? entry.receipts
+                      : entry.receipt
+                        ? [entry.receipt]
+                        : []
+                    ).map((slip) => (
+                      <ReceiptSlipCard key={slip.id} receipt={slip} onUndo={undoReceipt} />
+                    ))}
                   </div>
                 );
               })}

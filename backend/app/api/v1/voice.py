@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+import re
+import edge_tts
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 
 from app.api.deps import get_active_business_id, get_current_user
 from app.db.supabase_client import get_admin_supabase
@@ -7,6 +10,7 @@ from app.domain.schemas.intents import (
     CreateProductAndExecuteRequest,
     OfflineSyncBatchRequest,
     TextCommandRequest,
+    TtsRequest,
     VoiceTurnResult,
 )
 from app.services.voice_pipeline import VoicePipelineService
@@ -99,3 +103,36 @@ async def sync_offline_batch(
         )
         results.append(res.model_dump())
     return {"synced_count": len(results), "results": results}
+
+
+def _clean_tts_text(text: str, language: str) -> str:
+    rupee_word = "rupees" if language == "en" else "rupaye"
+    cleaned = re.sub(r"₹\s*([\d,]+(?:\.\d+)?)", lambda m: f"{m.group(1).replace(',', '')} {rupee_word}", text)
+    cleaned = cleaned.replace("→", " to ")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+@router.post("/tts")
+async def synthesize_natural_speech(
+    req: TtsRequest,
+    user: dict = Depends(get_current_user),
+) -> Response:
+    """Free Neural TTS using Microsoft Edge Indian voices (Neerja / Swara)."""
+    _ = user
+    spoken = _clean_tts_text(req.text, req.language)
+    has_devanagari = any("\u0900" <= ch <= "\u097f" for ch in spoken)
+    voice = "hi-IN-SwaraNeural" if (req.language == "hi" or has_devanagari) else "en-IN-NeerjaExpressiveNeural"
+    try:
+        comm = edge_tts.Communicate(spoken, voice, rate="+2%")
+        audio_chunks: list[bytes] = []
+        async for chunk in comm.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+        audio_bytes = b"".join(audio_chunks)
+        if not audio_bytes:
+            raise HTTPException(status_code=502, detail="Empty TTS stream")
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Neural TTS unavailable: {exc}") from exc

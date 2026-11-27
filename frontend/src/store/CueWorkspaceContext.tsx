@@ -16,6 +16,7 @@ import {
   clearUnusedCatalogRemote,
   confirmTier3Remote,
   createProductFromPopupRemote,
+  deleteAccountRemote,
   fetchWorkspaceBootstrap,
   sendTextCommandRemote,
   sendVoiceAudioTurn,
@@ -104,6 +105,7 @@ interface CueWorkspaceContextValue {
   needsOnboarding: boolean;
   isDemoMode: boolean;
   signOut: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   refreshWorkspace: () => Promise<void>;
   archiveProduct: (productId: string) => Promise<void>;
   clearUnusedCatalog: () => Promise<number>;
@@ -536,6 +538,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
                   language: (m.language as LanguageMode) ?? "hinglish",
                   operationId: m.linked_operation_id ? String(m.linked_operation_id) : undefined,
                   receipt: ui?.receipts?.[0],
+                  receipts: ui?.receipts,
                   clarification: ui?.clarification ?? undefined,
                 };
               });
@@ -1429,21 +1432,9 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         language: res.language,
         operationId: res.operation_id,
         receipt: res.receipts?.[0],
+        receipts: res.receipts,
         clarification: res.clarification ?? undefined,
       });
-      if (res.receipts && res.receipts.length > 1) {
-        res.receipts.slice(1).forEach((slip, i) => {
-          entriesToAdd.push({
-            id: `ast-${res.operation_id}-${i + 1}`,
-            role: "assistant",
-            content: slip.title,
-            timestamp: formatTimeIST(nowIso),
-            language: res.language,
-            operationId: slip.operationId,
-            receipt: slip,
-          });
-        });
-      }
       appendEntriesToDate(todayYmd, entriesToAdd);
 
       if (res.new_product_draft) {
@@ -2497,6 +2488,11 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     ]);
   }, [todayYmd]);
 
+  const deleteAccount = useCallback(async () => {
+    await deleteAccountRemote();
+    await signOut();
+  }, [signOut]);
+
   const addManualExpense = useCallback(
     (e: Omit<Expense, "id" | "operationId" | "createdAt" | "status">) => {
       const opId = makeOperationId();
@@ -2628,6 +2624,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         needsOnboarding,
         isDemoMode,
         signOut,
+        deleteAccount,
         refreshWorkspace: refreshLiveWorkspace,
         archiveProduct,
         clearUnusedCatalog,

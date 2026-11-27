@@ -49,6 +49,10 @@ class _TableQueryBuilder:
         self._headers["Prefer"] = "return=representation"
         return self
 
+    def delete(self) -> "_TableQueryBuilder":
+        self._method = "DELETE"
+        return self
+
     def eq(self, col: str, val: Any) -> "_TableQueryBuilder":
         v = "true" if val is True else ("false" if val is False else str(val))
         self._params.append((col, f"eq.{v}"))
@@ -131,6 +135,14 @@ class SupabaseRestClient:
 
     def rpc(self, fn_name: str, params: dict[str, Any] | None = None) -> _RpcQueryBuilder:
         return _RpcQueryBuilder(self._client, self._base_url, self._headers, fn_name, params or {})
+
+    def delete_auth_user(self, user_id: str) -> None:
+        resp = self._client.delete(
+            f"{self._base_url}/auth/v1/admin/users/{user_id}",
+            headers=self._headers,
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Supabase Auth Admin error ({resp.status_code}): {resp.text}")
 
 
 @lru_cache(maxsize=1)

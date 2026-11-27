@@ -152,6 +152,7 @@ export interface ChatEntry {
   language: LanguageMode;
   operationId?: string;
   receipt?: ReceiptSlip;
+  receipts?: ReceiptSlip[];
   clarification?: {
     kind:
       | "disambiguate_product"

@@ -253,3 +253,46 @@ def clear_unused_inventory_products(
     tx = TransactionEngine(get_admin_supabase())
     archived_count = tx.archive_unused_products(business_id=business_id)
     return {"status": "ok", "archived_count": archived_count}
+
+
+@router.delete("/account")
+def delete_user_account(user: dict = Depends(get_current_user)) -> dict:
+    """Permanently deletes the authenticated owner's store data and auth user so they can restart cleanly."""
+    db = get_admin_supabase()
+    uid = str(user["user_id"])
+    owned = (
+        db.table("businesses")
+        .select("id")
+        .eq("owner_id", uid)
+        .execute()
+        .data
+        or []
+    )
+    biz_ids = [str(b["id"]) for b in owned]
+    if biz_ids:
+        child_tables = [
+            "sale_items",
+            "sales",
+            "customer_payments",
+            "inventory_movements",
+            "expenses",
+            "conversation_messages",
+            "conversations",
+            "voice_transactions",
+            "pending_confirmations",
+            "business_insights_events",
+            "inventory",
+            "product_aliases",
+            "product_unit_conversions",
+            "products",
+            "customers",
+            "business_subscriptions",
+            "business_members",
+        ]
+        for tbl in child_tables:
+            db.table(tbl).delete().in_("business_id", biz_ids).execute()
+        db.table("businesses").delete().in_("id", biz_ids).execute()
+
+    db.table("business_members").delete().eq("user_id", uid).execute()
+    db.delete_auth_user(uid)
+    return {"status": "deleted", "user_id": uid}

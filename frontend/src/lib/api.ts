@@ -155,3 +155,9 @@ export async function addManualProductRemote(payload: {
     body: JSON.stringify(payload),
   });
 }
+
+export async function deleteAccountRemote() {
+  return apiFetch<{ status: string; user_id: string }>("/account", {
+    method: "DELETE",
+  });
+}

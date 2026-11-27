@@ -54,7 +54,15 @@ class VoiceOperationItem(StrictModel):
     confidence: float = Field(default=0.95, ge=0.0, le=1.0)
     has_ambiguity_or_noise_conflict: bool = False
     clarification_question: str | None = Field(default=None, max_length=240)
-    query_topic: Literal["sales_summary", "pending_payments", "customer_balance", "stock_check", "general"] | None = None
+    query_topic: Literal[
+        "sales_summary",
+        "expenses_summary",
+        "daily_summary",
+        "pending_payments",
+        "customer_balance",
+        "stock_check",
+        "general",
+    ] | None = None
     notes: str | None = Field(default=None, max_length=240)
 
     @field_validator("product_query", "customer_query", "description")
@@ -84,6 +92,11 @@ class TextCommandRequest(StrictModel):
     operation_id: str = Field(min_length=8, max_length=64)
     language: Literal["hinglish", "hi", "en"] = "hinglish"
     conversation_date: str | None = None
+
+
+class TtsRequest(StrictModel):
+    text: str = Field(min_length=1, max_length=800)
+    language: Literal["hinglish", "hi", "en"] = "hinglish"
 
 
 class ClarificationChoiceRequest(StrictModel):

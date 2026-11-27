@@ -142,3 +142,25 @@ def test_query_engine_stock_check():
 
     empty_res = qe.answer_query(business_id="b1", topic="stock_check", products=[])
     assert "khaali" in empty_res["reply"].lower()
+
+    coca_res = qe.answer_query(
+        business_id="b1",
+        topic="stock_check",
+        product_query="coca cola",
+        products=[{"id": "p3", "name": "Coca-Cola 750ml", "base_unit": "piece", "current_stock": 18, "low_stock_threshold": 8, "default_selling_price": 40}],
+        aliases=[],
+    )
+    assert "18 piece Coca-Cola 750ml" in coca_res["reply"]
+
+
+def test_expenses_and_stock_query_parsing():
+    exp_prop = deterministic_fallback_parse("Is there any expenses till now?", "en")
+    assert len(exp_prop.operations) == 1
+    assert exp_prop.operations[0].intent == "query_business"
+    assert exp_prop.operations[0].query_topic == "expenses_summary"
+
+    stk_prop = deterministic_fallback_parse("hamari inventory mein kitni coca cola hain?", "hinglish")
+    assert len(stk_prop.operations) == 1
+    assert stk_prop.operations[0].intent == "query_business"
+    assert stk_prop.operations[0].query_topic == "stock_check"
+    assert stk_prop.operations[0].product_query == "coca cola"

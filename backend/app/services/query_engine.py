@@ -49,6 +49,22 @@ class QueryEngine:
                         ],
                         "amount_inr": None,
                     }
+                tokens = [t for t in product_query.lower().replace("-", " ").split() if len(t) > 1]
+                token_matches = [
+                    p
+                    for p in prods
+                    if tokens and all(t in p["name"].lower().replace("-", " ") for t in tokens)
+                ]
+                if token_matches:
+                    summary = ", ".join(f"{p['name']}: {float(p.get('current_stock') or 0):g} {p.get('base_unit', 'piece')}" for p in token_matches)
+                    return {
+                        "reply": f"Inventory mein {summary} available hain.",
+                        "lines": [
+                            {"label": p["name"], "value": f"{float(p.get('current_stock') or 0):g} {p.get('base_unit', 'piece')}", "tone": "sage"}
+                            for p in token_matches
+                        ],
+                        "amount_inr": None,
+                    }
                 return {
                     "reply": f"Inventory mein '{product_query}' naam ka koi product nahi mila.",
                     "lines": [],
@@ -98,6 +114,68 @@ class QueryEngine:
                 "reply": f"{len(pending)} customers ka total ₹{total_due:,.0f} payment pending hai: {details}.",
                 "lines": [{"label": c["name"], "value": f"₹{float(c['outstanding_balance']):,.0f}", "tone": "ochre"} for c in pending[:6]],
                 "amount_inr": total_due,
+            }
+
+        if topic == "expenses_summary":
+            exp_res = (
+                self.db.table("expenses")
+                .select("category, description, amount, payment_method, status")
+                .eq("business_id", business_id)
+                .eq("transaction_date", today_str)
+                .neq("status", "voided")
+                .execute()
+            )
+            exps = exp_res.data or []
+            if not exps:
+                return {
+                    "reply": "Aaj abhi tak koi expense record nahi hua hai.",
+                    "lines": [{"label": "Total Expenses", "value": "₹0", "tone": "sage"}],
+                    "amount_inr": 0.0,
+                }
+            exp_total = sum(float(e["amount"]) for e in exps)
+            return {
+                "reply": f"Aaj abhi tak {len(exps)} expenses hue hain, total ₹{exp_total:,.0f}.",
+                "lines": [
+                    {
+                        "label": str(e.get("description") or e.get("category") or "Expense"),
+                        "value": f"₹{float(e['amount']):,.0f} ({str(e.get('payment_method') or 'cash').upper()})",
+                        "tone": "crimson",
+                    }
+                    for e in exps[:6]
+                ],
+                "amount_inr": exp_total,
+            }
+
+        if topic == "daily_summary":
+            sales_res = (
+                self.db.table("sales")
+                .select("total_amount, paid_amount, status")
+                .eq("business_id", business_id)
+                .eq("transaction_date", today_str)
+                .neq("status", "voided")
+                .execute()
+            )
+            exp_res = (
+                self.db.table("expenses")
+                .select("amount, status")
+                .eq("business_id", business_id)
+                .eq("transaction_date", today_str)
+                .neq("status", "voided")
+                .execute()
+            )
+            s_rows = sales_res.data or []
+            e_rows = exp_res.data or []
+            s_tot = sum(float(r["total_amount"]) for r in s_rows)
+            e_tot = sum(float(r["amount"]) for r in e_rows)
+            net = s_tot - e_tot
+            return {
+                "reply": f"Aaj ka hisaab: {len(s_rows)} sales (₹{s_tot:,.0f}), {len(e_rows)} expenses (₹{e_tot:,.0f}), net balance ₹{net:,.0f}.",
+                "lines": [
+                    {"label": "Sales Revenue", "value": f"₹{s_tot:,.0f}", "tone": "sage"},
+                    {"label": "Expenses", "value": f"₹{e_tot:,.0f}", "tone": "crimson"},
+                    {"label": "Net", "value": f"₹{net:,.0f}", "tone": "ochre" if net < 0 else "sage"},
+                ],
+                "amount_inr": net,
             }
 
         # Default: today's sales summary

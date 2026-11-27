@@ -60,12 +60,19 @@ SECURITY & PRECISION RULES:
       "confidence": number,
       "has_ambiguity_or_noise_conflict": boolean,
       "clarification_question": string | null,
-      "query_topic": "sales_summary" | "pending_payments" | "customer_balance" | "stock_check" | "general" | null,
+      "query_topic": "sales_summary" | "expenses_summary" | "daily_summary" | "pending_payments" | "customer_balance" | "stock_check" | "general" | null,
       "notes": string | null
     }
   ],
   "spoken_reply_hint": string | null
-}"""
+}
+QUERY TOPIC RULES (CRITICAL — NEVER MIX TOPICS):
+- Asking about expenses/kharcha/spending ("Is there any expenses till now?", "Aaj kitna kharcha hua?", "Expenses batao") -> `intent: "query_business"`, `query_topic: "expenses_summary"`.
+- Asking about stock/inventory quantities ("Hamari inventory mein kitni Coca Cola hain?", "How much Maggi in stock?") -> `intent: "query_business"`, `query_topic: "stock_check"`, `product_query: "<item>"`.
+- Asking about sales/revenue ("Aaj kitni sale hui?", "Sales till now") -> `intent: "query_business"`, `query_topic: "sales_summary"`.
+- Asking about pending payments / udhaar / customer balance ("Ramesh ka kitna baki hai?", "Pending payments?") -> `intent: "query_business"`, `query_topic: "customer_balance"` or `"pending_payments"`.
+- Asking about overall day summary / profit ("Aaj ka poora hisaab", "Today's summary") -> `intent: "query_business"`, `query_topic: "daily_summary"`.
+"""
 
 
 def _extract_json_block(raw_text: str) -> dict[str, Any]:
@@ -105,8 +112,32 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[VoiceOperationItem(intent="undo_last_operation", uses_prior_context=True)],
         )
 
-    if re.search(r"(kitni sale|aaj ki sale|today.*sale|pending|kitna payment)", lower):
-        topic = "pending_payments" if "pending" in lower or "payment" in lower else "sales_summary"
+    if re.search(r"(expense|expenses|kharcha|kharch)\b", lower) and re.search(r"(\?|any|till now|how much|kitna|kitne|aaj ka|today|batao|dikhao|hisaab)", lower):
+        return IntentProposal(
+            detected_language=lang,  # type: ignore[arg-type]
+            operations=[VoiceOperationItem(intent="query_business", query_topic="expenses_summary")],
+        )
+
+    if re.search(r"(inventory|stock|kitni.*padi|kitna.*bacha|kitni.*hain|how many.*in stock|how much.*stock)", lower):
+        pq = re.sub(
+            r"\b(hamari|humari|mere|meri|inventory|stock|mein|me|in|kitni|kitna|kitne|padi|pada|hai|hain|bachi|bacha|how|many|much|are|there|is)\b",
+            " ",
+            re.sub(r"[?!.,]+", " ", lower),
+        )
+        pq_clean = re.sub(r"\s+", " ", pq).strip() or None
+        return IntentProposal(
+            detected_language=lang,  # type: ignore[arg-type]
+            operations=[VoiceOperationItem(intent="query_business", query_topic="stock_check", product_query=pq_clean)],
+        )
+
+    if re.search(r"(aaj ka hisaab|daily summary|today.*summary|kitna munafa|kitna profit)", lower):
+        return IntentProposal(
+            detected_language=lang,  # type: ignore[arg-type]
+            operations=[VoiceOperationItem(intent="query_business", query_topic="daily_summary")],
+        )
+
+    if re.search(r"(kitni sale|aaj ki sale|today.*sale|sales till now|pending|kitna payment|baki hai)", lower):
+        topic = "pending_payments" if ("pending" in lower or "payment" in lower or "baki" in lower) else "sales_summary"
         return IntentProposal(
             detected_language=lang,  # type: ignore[arg-type]
             operations=[VoiceOperationItem(intent="query_business", query_topic=topic)],

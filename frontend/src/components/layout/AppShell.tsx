@@ -18,6 +18,7 @@ import {
   LogOut,
   Mic,
   Store,
+  Trash2,
   UserCheck,
 } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
@@ -39,6 +40,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleteText, setDeleteText] = useState("");
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const {
     store,
@@ -66,6 +71,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     needsOnboarding,
     isDemoMode,
     signOut,
+    deleteAccount,
     enableDemoPreview,
   } = useCueWorkspace();
 
@@ -470,6 +476,72 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   Parser-only AI · Negative stock blocked · ≥ ₹5,000 gated
                 </p>
               </div>
+
+              {authUser && (
+                <div className="p-3.5 rounded-xl bg-paper border border-crimson/25 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-crimson">Delete Account &amp; Reset</span>
+                    {!confirmDeleteOpen && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmDeleteOpen(true);
+                          setDeleteError(null);
+                          setDeleteText("");
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-crimson border border-crimson/30 hover:bg-crimson hover:text-white transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-ink-muted leading-relaxed">
+                    Permanently deletes your account and store ledger so you can create a fresh account.
+                  </p>
+                  {confirmDeleteOpen && (
+                    <div className="space-y-2 pt-1">
+                      <input
+                        type="text"
+                        value={deleteText}
+                        onChange={(e) => setDeleteText(e.target.value)}
+                        placeholder='Type DELETE to confirm'
+                        className="w-full px-3 py-1.5 text-xs rounded-lg bg-paper-elevated border border-rule font-mono focus:outline-none focus:border-crimson"
+                      />
+                      {deleteError && <p className="text-[11px] text-crimson">{deleteError}</p>}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={deletingAccount || deleteText.trim().toUpperCase() !== "DELETE"}
+                          onClick={async () => {
+                            setDeletingAccount(true);
+                            setDeleteError(null);
+                            try {
+                              await deleteAccount();
+                              setRegisterOpen(false);
+                              window.location.href = "/login";
+                            } catch (err) {
+                              setDeleteError(err instanceof Error ? err.message : "Failed to delete account");
+                            } finally {
+                              setDeletingAccount(false);
+                            }
+                          }}
+                          className="flex-1 py-1.5 rounded-lg text-xs font-medium bg-crimson text-white disabled:opacity-40 hover:opacity-90 transition-opacity"
+                        >
+                          {deletingAccount ? "Deleting..." : "Confirm Delete"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteOpen(false)}
+                          className="px-3 py-1.5 rounded-lg text-xs text-ink-secondary border border-rule hover:border-rule-strong"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="p-4 border-t border-rule grid grid-cols-2 gap-2">
