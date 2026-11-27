@@ -21,10 +21,28 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers["Content-Type"] = "application/json";
   }
 
-  const resp = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers,
-  });
+  let resp: Response | null = null;
+  let lastNetworkErr: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      resp = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        headers,
+      });
+      lastNetworkErr = null;
+      break;
+    } catch (err) {
+      lastNetworkErr = err;
+      // Retry once after transient keep-alive/socket reset on local server
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+    }
+  }
+  if (!resp) {
+    throw lastNetworkErr instanceof Error ? lastNetworkErr : new Error("Failed to fetch");
+  }
 
   if (!resp.ok) {
     const errBody = await resp.json().catch(() => ({}));

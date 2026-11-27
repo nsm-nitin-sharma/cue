@@ -14,7 +14,11 @@ from app.core.time_utils import (
     get_business_today,
     resolve_relative_date,
 )
-from app.domain.indian_numbers import extract_post_negation_number, parse_indian_number
+from app.domain.indian_numbers import (
+    extract_post_negation_number,
+    extract_post_negation_quantity,
+    parse_indian_number,
+)
 from app.domain.schemas.intents import (
     ConfirmOperationRequest,
     CreateProductAndExecuteRequest,
@@ -28,6 +32,7 @@ from app.providers.stt.factory import get_stt_provider
 from app.services.entity_resolver import (
     resolve_customer,
     resolve_product,
+    resolve_product_guarded,
     resolve_short_variant_reply,
 )
 from app.services.memory_30d import Memory30DService
@@ -1132,15 +1137,24 @@ class VoicePipelineService:
                             target_pm = "cash"
                         elif re.search(r"\budhaar\b", tlow):
                             target_ps = "credit"
-                    corr_pay = self.tx.correct_sale_payment(
-                        business_id=business_id,
-                        user_id=user_id,
-                        sale_id=str(sale_id),
-                        operation_id=sub_op_id,
-                        transaction_date=today_str,
-                        new_payment_method=target_pm,
-                        new_payment_status=target_ps,
-                    )
+                    try:
+                        corr_pay = self.tx.correct_sale_payment(
+                            business_id=business_id,
+                            user_id=user_id,
+                            sale_id=str(sale_id),
+                            operation_id=sub_op_id,
+                            transaction_date=today_str,
+                            new_payment_method=target_pm,
+                            new_payment_status=target_ps,
+                        )
+                    except RuntimeError as exc:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=f"Payment method update nahi ho paya ({exc}). Kripya receipt par Reverse karke nayi entry bolein.",
+                            language=language,  # type: ignore[arg-type]
+                        )
                     context_state["last_sale_id"] = str(corr_pay["new_sale_id"])
                     replies.append(
                         f"Sale payment update ho gaya: ₹{corr_pay['total_amount']:,.0f} ({corr_pay['old_method']} → {corr_pay['new_method']})."
@@ -1163,16 +1177,43 @@ class VoicePipelineService:
                     )
                     continue
 
-                new_qty = op.quantity if op.quantity is not None else extract_post_negation_number(raw_transcript)
+                # Ignore size/weight numbers like "250 gram" / "70g" accidentally parsed as sale quantity
+                raw_op_qty = op.quantity
+                if raw_op_qty is not None and raw_op_qty == int(raw_op_qty):
+                    if re.search(
+                        rf"\b{int(raw_op_qty)}\s*(?:g|gm|gms|grams?|ml|mls|ltr|litres?|liters?)\b",
+                        raw_transcript,
+                        re.IGNORECASE,
+                    ):
+                        raw_op_qty = None
+                new_qty = raw_op_qty if raw_op_qty is not None else extract_post_negation_quantity(raw_transcript)
                 if sale_id and new_qty is not None:
-                    corr = self.tx.correct_sale_quantity(
-                        business_id=business_id,
-                        user_id=user_id,
-                        sale_id=sale_id,
-                        new_quantity=float(new_qty),
-                        operation_id=sub_op_id,
-                        transaction_date=today_str,
-                    )
+                    try:
+                        corr = self.tx.correct_sale_quantity(
+                            business_id=business_id,
+                            user_id=user_id,
+                            sale_id=sale_id,
+                            new_quantity=float(new_qty),
+                            operation_id=sub_op_id,
+                            transaction_date=today_str,
+                        )
+                    except RuntimeError as exc:
+                        err_s = str(exc)
+                        if "INSUFFICIENT_STOCK:" in err_s:
+                            avail = err_s.split("INSUFFICIENT_STOCK:", 1)[1].split('"', 1)[0].strip()
+                            msg = (
+                                f"Stock sirf {avail} bacha hai, isliye quantity {float(new_qty):g} update nahi ho sakti. "
+                                "Agar galat variant record hua ho toh receipt par 'Reverse' dabayein aur sahi product bolein."
+                            )
+                        else:
+                            msg = "Last sale quantity update nahi ho payi. Agar product galat tha toh receipt par 'Reverse' dabayein."
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=msg,
+                            language=language,  # type: ignore[arg-type]
+                        )
                     replies.append(
                         f"Sale correct ho gayi: {corr['old_quantity']:g} se {corr['new_quantity']:g} (₹{corr['new_total']:,.0f}). Audit trail updated."
                     )
@@ -1248,7 +1289,7 @@ class VoicePipelineService:
                         (p for p in products if str(p["id"]) == str(context_state["last_product_id"])), None
                     )
                 else:
-                    pres = resolve_product(op.product_query, products, aliases)
+                    pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
                     if pres.status == "exact":
                         target_prod = pres.product
                     elif pres.status == "verify_alias" and pres.product:
@@ -1684,7 +1725,7 @@ class VoicePipelineService:
                         reply="Kis product ka price ya low-stock limit update karna hai?",
                         language=language,  # type: ignore[arg-type]
                     )
-                pres = resolve_product(op.product_query, products, aliases)
+                pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
                 if pres.status == "ambiguous":
                     return VoiceTurnResult(
                         operation_id=operation_id,
@@ -1695,7 +1736,15 @@ class VoicePipelineService:
                         clarification={
                             "kind": "disambiguate_product",
                             "prompt": f"Select item for '{op.product_query}'",
-                            "options": [{"id": str(c["id"]), "label": c["name"], "value": c["name"]} for c in pres.candidates],
+                            "candidates": [
+                                {
+                                    "id": str(c["id"]),
+                                    "label": c["name"],
+                                    "meta": f"Stock: {c['current_stock']:g} · ₹{float(c['default_selling_price']):g}",
+                                    "value": c["name"],
+                                }
+                                for c in pres.candidates
+                            ],
                         },
                     )
                 if pres.status in {"exact", "verify_alias"} and pres.product:
@@ -1727,7 +1776,7 @@ class VoicePipelineService:
                         reply="Kis item ko catalog se archive karna hai?",
                         language=language,  # type: ignore[arg-type]
                     )
-                pres = resolve_product(op.product_query, products, aliases)
+                pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
                 if pres.status == "ambiguous":
                     return VoiceTurnResult(
                         operation_id=operation_id,
@@ -1738,7 +1787,15 @@ class VoicePipelineService:
                         clarification={
                             "kind": "disambiguate_product",
                             "prompt": f"Kaunsa '{op.product_query}' archive karna hai?",
-                            "options": [{"id": str(c["id"]), "label": c["name"], "value": c["name"]} for c in pres.candidates],
+                            "candidates": [
+                                {
+                                    "id": str(c["id"]),
+                                    "label": c["name"],
+                                    "meta": f"Stock: {c['current_stock']:g} · ₹{float(c['default_selling_price']):g}",
+                                    "value": c["name"],
+                                }
+                                for c in pres.candidates
+                            ],
                         },
                     )
                 if pres.status not in {"exact", "verify_alias"} or not pres.product:

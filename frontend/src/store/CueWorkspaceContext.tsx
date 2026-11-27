@@ -2710,6 +2710,10 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           await applyRemoteTurnResult(res, { includeUserTranscript: true });
           return;
         } catch (err) {
+          if (fallbackTranscript && fallbackTranscript.trim()) {
+            await submitCommand(fallbackTranscript, { operationId: opId });
+            return;
+          }
           const errMsg = err instanceof Error ? err.message : "Audio transcription failed";
           appendEntriesToDate(todayYmd, [
             {

@@ -96,3 +96,20 @@ def extract_post_negation_number(text: str) -> float | None:
         if val is not None:
             return val
     return parse_indian_number(text)
+
+
+def extract_post_negation_quantity(text: str) -> float | None:
+    """
+    Like extract_post_negation_number, but ignores size specs ('70g', '250 gram', '500ml')
+    so variant corrections like '70g nahi 250 gram' never set sale quantity = 250.
+    """
+    cleaned = re.sub(
+        r"\b\d+(?:\.\d+)?\s*(?:g|gm|gms|grams?|ml|mls|ltr|litres?|liters?)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\b\d+(?:\.\d+)?(?:g|gm|ml|l)\b", " ", cleaned, flags=re.IGNORECASE)
+    if not cleaned.strip():
+        return None
+    return extract_post_negation_number(cleaned)

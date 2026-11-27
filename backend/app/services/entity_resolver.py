@@ -101,6 +101,26 @@ class CustomerResolution:
     spoken_term: str = ""
 
 
+def _tokens_match_product(q_tokens: list[str], p_tokens: list[str]) -> bool:
+    """True if every meaningful query token matches some product word (exact or close spelling like 'maggie'->'maggi')."""
+    meaningful = [t for t in q_tokens if len(t) >= 3]
+    if not meaningful or not p_tokens:
+        return False
+    for qt in meaningful:
+        ht = _SYNONYM_HINTS.get(qt, qt)
+        matched = any(
+            qt == pt
+            or ht == pt
+            or qt in pt
+            or ht in pt
+            or (len(qt) >= 4 and len(pt) >= 4 and fuzz.ratio(qt, pt) >= 82)
+            for pt in p_tokens
+        )
+        if not matched:
+            return False
+    return True
+
+
 def resolve_product(
     query: str | None,
     products: list[dict[str, Any]],
@@ -108,10 +128,11 @@ def resolve_product(
 ) -> ProductResolution:
     """
     Strict Zero-Guessing Entity Resolver:
-    1. Exact normalized product name or verified alias -> 'exact'
-    2. Multiple strong matches (e.g. 'pepsi' -> 500ml & 2L) -> 'ambiguous'
-    3. Single fuzzy/phonetic match without verified alias (e.g. 'coke' -> Coca-Cola) -> 'verify_alias' ("Do you mean ...?")
-    4. No match -> 'not_found' (triggers New Product Pop-up + voice prompt)
+    1. Exact normalized product name (or unit-normalized exact name like '250g' == '250 gram') -> 'exact'
+    2. Multiple matching variants without disambiguating size -> 'ambiguous' (checked BEFORE aliases so adding a 2nd variant restores selection!)
+    3. Exact verified alias match (only when query isn't ambiguous across multiple SKUs) -> 'exact'
+    4. Single token match or fuzzy/phonetic match -> 'exact' (if high confidence) or 'verify_alias' ("Do you mean ...?")
+    5. No match -> 'not_found' (triggers New Product Pop-up + voice prompt)
     """
     if not query or not query.strip():
         return ProductResolution(status="not_found", spoken_term="")
@@ -120,46 +141,36 @@ def resolve_product(
     if not norm_q:
         return ProductResolution(status="not_found", spoken_term=query)
 
+    norm_u = _normalize_units(norm_q)
     prod_by_id = {str(p["id"]): p for p in products}
 
-    # 1. Exact product name match
+    # 1. Exact product name match (raw normalized or unit-normalized e.g. 'maggi masala 250g' == 'Maggi Masala 250 Gram')
     for p in products:
-        if normalize_text(p["name"]) == norm_q:
+        p_norm = normalize_text(p["name"])
+        if p_norm == norm_q or _normalize_units(p_norm) == norm_u:
             return ProductResolution(status="exact", product=p, spoken_term=query)
 
-    # 2. Exact verified alias match
-    for al in aliases:
-        if al.get("is_verified", True) and normalize_text(al["alias_text"]) == norm_q:
-            target = prod_by_id.get(str(al["product_id"]))
-            if target:
-                return ProductResolution(status="exact", product=target, spoken_term=query)
-
-    # 3. Token / variant containment (e.g., "pepsi" or "coke" matching multiple variants)
-    norm_u = _normalize_units(norm_q)
+    # 2. Check multi-variant containment FIRST so adding a 2nd SKU ('Maggi Masala 250 Gram') always disambiguates
     q_sizes = _extract_size_tokens(norm_u)
     core_q = _strip_packaging(norm_u)
     hinted_q = " ".join(_SYNONYM_HINTS.get(tok, tok) for tok in core_q.split())
-    q_tokens = {tok for tok in core_q.split() if len(tok) >= 4}
-    h_tokens = {tok for tok in hinted_q.split() if len(tok) >= 4}
+    core_q_words = core_q.split()
+    hinted_q_words = hinted_q.split()
+
     variant_matches: list[dict[str, Any]] = []
     for p in products:
         p_norm = _normalize_units(normalize_text(p["name"]))
         if _sizes_conflict(q_sizes, p_norm):
             continue
         core_p = _strip_packaging(p_norm)
+        core_p_words = core_p.split()
         if (
             core_q in core_p
             or hinted_q in core_p
-            or any(tok in core_p.split() for tok in (q_tokens | h_tokens))
+            or _tokens_match_product(core_q_words, core_p_words)
+            or _tokens_match_product(hinted_q_words, core_p_words)
         ):
             variant_matches.append(p)
-
-    if len(variant_matches) == 1 and hinted_q == core_q:
-        return ProductResolution(
-            status="exact",
-            product=variant_matches[0],
-            spoken_term=query,
-        )
 
     if len(variant_matches) > 1:
         return ProductResolution(
@@ -167,6 +178,26 @@ def resolve_product(
             candidates=variant_matches[:5],
             spoken_term=query,
         )
+
+    # 3. Exact verified alias match (only if not ambiguous across multiple SKUs)
+    for al in aliases:
+        al_norm = normalize_text(al["alias_text"])
+        if al.get("is_verified", True) and (al_norm == norm_q or _normalize_units(al_norm) == norm_u):
+            target = prod_by_id.get(str(al["product_id"]))
+            if target:
+                return ProductResolution(status="exact", product=target, spoken_term=query)
+
+    if len(variant_matches) == 1 and hinted_q == core_q:
+        # Guard against typos like "maggie masala" when exact spelling matched weakly via fuzzy token:
+        # if core_q is verbatim in core_p, exact; if only fuzzy token matched (typo), auto-resolve if strong WRatio >= 86
+        only_p = variant_matches[0]
+        only_core_p = _strip_packaging(_normalize_units(normalize_text(only_p["name"])))
+        if core_q in only_core_p or fuzz.WRatio(core_q, only_core_p) >= 86:
+            return ProductResolution(
+                status="exact",
+                product=only_p,
+                spoken_term=query,
+            )
 
     # 4. Single fuzzy / phonetic match -> auto-resolve if ultra-high confidence (>= 88, e.g. "maggie masala" -> "Maggi Masala 70g"),
     #    otherwise ask "Do you mean ...?" (e.g. "coke" -> "Coca-Cola 750ml")
@@ -217,6 +248,40 @@ def resolve_product(
         )
 
     return ProductResolution(status="not_found", spoken_term=query)
+
+
+def resolve_product_guarded(
+    query: str | None,
+    raw_transcript: str,
+    products: list[dict[str, Any]],
+    aliases: list[dict[str, Any]],
+) -> ProductResolution:
+    """
+    Runs resolve_product and guards against LLM over-normalization:
+    if LLM injected a variant size token (e.g., '70g') that the user never spoke in raw_transcript,
+    re-resolve without the hallucinated size so multi-variant SKUs still trigger disambiguation.
+    """
+    pres = resolve_product(query, products, aliases)
+    if pres.status == "exact" and pres.product and query:
+        p_norm = _normalize_units(normalize_text(pres.product["name"]))
+        p_sizes = _extract_size_tokens(p_norm)
+        t_norm = _normalize_units(normalize_text(raw_transcript))
+        t_sizes = _extract_size_tokens(t_norm)
+        if p_sizes and not (p_sizes & t_sizes):
+            t_words = set(t_norm.split())
+            size_nums = {m for tok in p_sizes for m in re.findall(r"\d+(?:\.\d+)?", tok)}
+            if not (size_nums & t_words):
+                stripped_q = re.sub(
+                    r"\b\d+(?:\.\d+)?\s*(?:g|gm|gms|grams?|kg|kgs|kilos?|ml|mls|l|ltr|litres?|liters?)\b",
+                    "",
+                    query,
+                    flags=re.IGNORECASE,
+                ).strip()
+                if stripped_q and stripped_q.lower() != query.lower():
+                    alt = resolve_product(stripped_q, products, aliases)
+                    if alt.status == "ambiguous":
+                        return alt
+    return pres
 
 
 def resolve_short_variant_reply(

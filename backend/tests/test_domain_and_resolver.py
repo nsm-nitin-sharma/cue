@@ -2,13 +2,18 @@ from datetime import date
 
 from app.core.policy import PolicyBlockedError, SecurityPolicyEngine
 from app.core.time_utils import check_memory_window_days, detect_over_30_day_reference
-from app.domain.indian_numbers import extract_post_negation_number, parse_indian_number
+from app.domain.indian_numbers import (
+    extract_post_negation_number,
+    extract_post_negation_quantity,
+    parse_indian_number,
+)
 from app.domain.schemas.intents import IntentProposal, VoiceOperationItem
 from app.domain.unit_converter import convert_to_base_quantity
 from app.providers.llm.gemini import deterministic_fallback_parse
 from app.services.entity_resolver import (
     resolve_customer,
     resolve_product,
+    resolve_product_guarded,
     resolve_short_variant_reply,
 )
 from app.services.query_engine import QueryEngine
@@ -221,3 +226,39 @@ def test_expenses_and_stock_query_parsing():
         selling_price=50.0,
     )
     assert new_item_op.cost_price == 5.0 and new_item_op.selling_price == 50.0
+
+
+def test_multivariant_disambiguation_with_existing_alias_and_llm_guard():
+    catalog = [
+        {"id": "m70", "name": "Maggi Masala 70g", "base_unit": "packet"},
+        {"id": "m250", "name": "Maggi Masala 250 Gram", "base_unit": "packet"},
+        {"id": "gm100", "name": "Garam Masala 100g", "base_unit": "packet"},
+    ]
+    existing_aliases = [
+        {"product_id": "m70", "alias_text": "maggi masala", "is_verified": True},
+        {"product_id": "m70", "alias_text": "maggi", "is_verified": True},
+    ]
+
+    # Even with an older verified alias pointing to Maggi Masala 70g, adding 250 Gram must show both!
+    res = resolve_product("Maggi masala", catalog, existing_aliases)
+    assert res.status == "ambiguous"
+    assert {c["name"] for c in res.candidates} == {"Maggi Masala 70g", "Maggi Masala 250 Gram"}
+
+    # Whisper spelling variance ("Maggie masala") must also show both Maggi SKUs and NOT Garam Masala
+    res_typo = resolve_product("Maggie masala", catalog, existing_aliases)
+    assert res_typo.status == "ambiguous"
+    assert {c["name"] for c in res_typo.candidates} == {"Maggi Masala 70g", "Maggi Masala 250 Gram"}
+
+    # Even if LLM mistakenly returned "Maggi Masala 70g" when user only said "One Maggi masala sold.",
+    # transcript guard detects "70g" was not spoken and restores disambiguation!
+    guarded = resolve_product_guarded("Maggi Masala 70g", "One Maggi masala sold.", catalog, existing_aliases)
+    assert guarded.status == "ambiguous"
+    assert {c["name"] for c in guarded.candidates} == {"Maggi Masala 70g", "Maggi Masala 250 Gram"}
+
+    # When user actually speaks the size ("Maggi masala 250g"), unit normalization resolves cleanly!
+    explicit = resolve_product_guarded("Maggi Masala 250 Gram", "One Maggi masala 250g sold.", catalog, existing_aliases)
+    assert explicit.status == "exact" and explicit.product["id"] == "m250"
+
+    # Variant size corrections like "70g nahi 250 gram" must NOT extract 250 as sale quantity!
+    assert extract_post_negation_quantity("Maggi Masala 70g nahi 250 gram") is None
+    assert extract_post_negation_quantity("20 pepsi nahi 10 hi biki") == 10.0
