@@ -24,7 +24,7 @@ SECURITY & PRECISION RULES:
    - For Khata (Customer Credit) CRUD: use `create_customer`, `update_customer`, `record_udhaar_credit` (direct credit without product), `record_customer_payment`, or `query_business` (`query_topic: "pending_payments"` or `"customer_balance"`).
 5. If the speaker gives MULTIPLE commands in one breath (e.g., "20 Maggi aayi, 10 Pepsi ki bottle aayi, 5 Maggi biki"), extract ALL operations in exact chronological order inside the `operations` array.
 6. CORRECTION VS NEW OPERATION (CRITICAL — DO NOT DUPLICATE):
-   - If the user is correcting ANY detail of the immediately previous transaction in `active_context` (`last_operation_kind`, `last_expense_id`, `last_sale_id`) — e.g. "20 pepsi nahi 10 hi biki", "Actually 7 the", "cash nahi, UPI se kiya tha", "cash nahi UBI se kia tha", "1000 nahi 500 tha", "galti se cash bol diya" — output `intent: "correct_last_operation"` (or `"correct_last_sale"` for sale qty) with ONLY the corrected field(s) (`payment_method`, `total_amount`, `quantity`, `unit_price`). NEVER emit `record_expense` or `record_sale` for a correction!
+   - If the user is correcting ANY detail of the immediately previous transaction in `active_context` (`last_operation_kind`, `last_expense_id`, `last_sale_id`) — e.g. "20 pepsi nahi 10 hi biki", "Actually 7 the", "Cash nahi online", "Online nahi cash tha", "Last transaction cash se nahi online hua tha", "1000 nahi 500 tha", "galti se cash bol diya" — output `intent: "correct_last_operation"` (or `"correct_last_sale"` for sale qty) with `confidence: 0.96`, `has_ambiguity_or_noise_conflict: false`, `uses_prior_context: true`, and ONLY the corrected field(s) (`payment_method`, `payment_status`, `total_amount`, `quantity`, `unit_price`). NEVER emit `record_expense` or `record_sale` for a correction, and NEVER ask which transaction when `last_sale_id` or `last_expense_id` is in `active_context`!
    - Normalize Whisper STT & payment terms: "online" / "UBI" / "UPI" / "GPay" / "PhonePe" / "Paytm" -> `"upi"` (stored as `"upi"` internally, displayed as "Online"). Default to `"cash"` when unspecified.
    - For unpaid credit sales like "Nitin purchased 10 bottles of Coke but he did not paid" or "Nitin ko 10 Coke udhaar di", set `intent: "record_sale"`, `product_query`, `customer_query: "Nitin"`, `quantity: 10`, `payment_status: "credit"`, `paid_amount: 0`.
    - If user explicitly asks to add a new product ("Surf Excel naya product add kar do", "50 surf excel 100g packet new product aaya hai"), set `intent: "create_product"`, `product_query`, `quantity`, `unit`, `unit_price`.
@@ -105,19 +105,32 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[VoiceOperationItem(intent="clarify_response", is_negative=True)],
         )
 
-    if re.search(r"(cash\s+nahi|upi\s+nahi|online\s+nahi|ubi\s+se|upi\s+se|online\s+se|galti\s+se|actually|ki\s+jagah|\d+.*\bnahi\b.*\d+)", lower):
+    if re.search(
+        r"(cash\s+(?:se\s+)?nahi|upi\s+(?:se\s+)?nahi|online\s+(?:se\s+)?nahi|ubi\s+se|upi\s+se|online\s+(?:hua|kiya|se)|last\s+transaction|galti\s+se|actually|ki\s+jagah|\d+.*\bnahi\b.*\d+)",
+        lower,
+    ):
         qty = extract_post_negation_number(utterance)
         pm: str | None = None
-        if re.search(r"\b(online|upi|ubi|gpay|phonepe|paytm)\b", lower):
+        if re.search(r"\b(online|upi|ubi|gpay|phonepe|paytm)\b", lower) and not re.search(
+            r"\b(?:online|upi|ubi)\s+(?:se\s+)?nahi\b", lower
+        ):
             pm = "upi"
-        elif re.search(r"\bcash\b", lower) and not re.search(r"\bcash\s+nahi\b", lower):
+        elif re.search(r"\bcash\b", lower) and not re.search(r"\bcash\s+(?:se\s+)?nahi\b", lower):
             pm = "cash"
         elif re.search(r"\bbank\b", lower):
             pm = "bank"
-        if pm is not None and qty is None:
+        pstat = "credit" if re.search(r"\budhaar\b", lower) and not re.search(r"\budhaar\s+nahi\b", lower) else None
+        if (pm is not None or pstat is not None) and qty is None:
             return IntentProposal(
                 detected_language=lang,  # type: ignore[arg-type]
-                operations=[VoiceOperationItem(intent="correct_last_operation", payment_method=pm, uses_prior_context=True)],  # type: ignore[arg-type]
+                operations=[
+                    VoiceOperationItem(
+                        intent="correct_last_operation",
+                        payment_method=pm,  # type: ignore[arg-type]
+                        payment_status=pstat,  # type: ignore[arg-type]
+                        uses_prior_context=True,
+                    )
+                ],
             )
         return IntentProposal(
             detected_language=lang,  # type: ignore[arg-type]

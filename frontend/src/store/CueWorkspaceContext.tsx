@@ -512,6 +512,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
             transactionDate: String(s.transaction_date),
             status: (s.status as Sale["status"]) ?? "active",
             operationId: String(s.operation_id),
+            notes: s.notes ? String(s.notes) : "",
             createdAt: String(s.created_at),
           };
         })
@@ -2675,7 +2676,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   );
 
   const todayStats = useMemo(() => {
-    const todaysSales = sales.filter((s) => s.transactionDate === todayYmd && s.status !== "voided");
+    const todaysSales = sales.filter((s) => s.transactionDate === todayYmd && s.status === "active");
     const salesTotal = todaysSales.reduce((a, s) => a + s.totalAmount, 0);
     const cashTotal = todaysSales.reduce((a, s) => a + s.paidAmount, 0);
     const udhaarTotal = salesTotal - cashTotal;

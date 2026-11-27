@@ -23,6 +23,7 @@ from app.domain.schemas.intents import (
 )
 from app.domain.unit_converter import convert_to_base_quantity
 from app.providers.llm.factory import get_llm_provider
+from app.providers.llm.gemini import deterministic_fallback_parse
 from app.providers.stt.factory import get_stt_provider
 from app.services.entity_resolver import (
     resolve_customer,
@@ -271,6 +272,32 @@ class VoicePipelineService:
             customer_hints=customer_hints,
         )
 
+        # Rescue explicit payment-method corrections ("Cash nahi online", "Last transaction cash se nahi online hua tha")
+        # when a recent sale or expense exists in conversation context so LLM uncertainty doesn't drop the update.
+        has_recent_tx = bool(context_state.get("last_sale_id") or context_state.get("last_expense_id"))
+        if has_recent_tx and re.search(
+            r"(?:cash\s+(?:se\s+)?(?:nahi|नहीं)|online\s+(?:se\s+)?(?:nahi|नहीं)|upi\s+(?:se\s+)?(?:nahi|नहीं)|last\s+transaction)",
+            clean_text,
+            re.IGNORECASE,
+        ):
+            top_intent = proposal.operations[0].intent if proposal.operations else "unknown"
+            if (
+                proposal.confidence < 0.85
+                or proposal.has_ambiguity_or_noise_conflict
+                or top_intent in {"unknown", "clarify_response", "record_sale", "record_expense"}
+            ):
+                normalized_correction = (
+                    clean_text.replace("से नहीं", "se nahi")
+                    .replace("नहीं", "nahi")
+                    .replace("कैश", "cash")
+                    .replace("ऑनलाइन", "online")
+                )
+                rescued = deterministic_fallback_parse(normalized_correction, language)
+                if rescued.operations and rescued.operations[0].intent == "correct_last_operation":
+                    proposal = rescued
+                    proposal.has_ambiguity_or_noise_conflict = False
+                    proposal.confidence = 0.95
+
         # 4b. Zero-Assumption Background Noise / Low-Confidence Guard
         if proposal.has_ambiguity_or_noise_conflict or proposal.confidence < 0.85:
             clar_msg = (
@@ -349,10 +376,11 @@ class VoicePipelineService:
         flow_type = pending_flow.get("type")
         lower = reply_text.lower().strip()
 
-        # If user abandons pending clarification with a brand-new command (e.g. "2 packets of Maggi masala 70 gram sold"),
+        # If user abandons pending clarification with a brand-new command (e.g. "2 packets of Maggi masala 70 gram sold")
+        # or a payment-method correction ("Last transaction cash se nahi online hua tha"),
         # clear pending_flow and let the main pipeline execute the new command cleanly.
         new_cmd_pattern = re.compile(
-            r"\b(sold|bik|biki|bika|bech|bechi|aayi|aaya|receive|add|expense|kharcha|udhaar|khata|paid|payment|damaged|expired|inventory|stock|cancel|chhodo|hatao)\b",
+            r"(?:\b(?:sold|bik|biki|bika|bech|bechi|aayi|aaya|receive|add|expense|kharcha|udhaar|khata|paid|payment|damaged|expired|inventory|stock|cancel|chhodo|hatao)\b|(?:cash|online|upi)\s+(?:se\s+)?(?:nahi|नहीं)|last\s+transaction)",
             re.IGNORECASE,
         )
         is_short_confirm = any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "ok", "same", "free"))
@@ -785,6 +813,7 @@ class VoicePipelineService:
             cust_name = draft.get("customer_name")
             total = qty * unit_price
             paid = total if p_status == "paid" else float(draft.get("paid_amount") or 0)
+            sale_notes = f"{'[ONLINE]' if p_method == 'upi' else ('[UDHAAR]' if p_status == 'credit' else '[CASH]')} {draft.get('notes') or 'Voice sale'}"
             rpc = self.tx.record_sale(
                 business_id=business_id,
                 user_id=user_id,
@@ -798,6 +827,7 @@ class VoicePipelineService:
                 customer_id=draft.get("customer_id"),
                 transaction_date=txn_date,
                 operation_id=operation_id,
+                notes=sale_notes,
             )
             context_state["last_product_id"] = str(product["id"])
             context_state["last_product_name"] = product["name"]
@@ -1078,6 +1108,55 @@ class VoicePipelineService:
                             "lines": [
                                 {"label": "Method", "value": f"{old_m} → {new_m}", "tone": "sage"},
                                 {"label": "Amount", "value": f"₹{corr_exp['new_amount']:,.0f}", "tone": "neutral"},
+                            ],
+                            "status": "corrected",
+                        }
+                    )
+                    continue
+
+                if sale_id and (
+                    op.payment_method is not None
+                    or op.payment_status is not None
+                    or (
+                        op.quantity is None
+                        and re.search(r"\b(online|upi|cash|bank|udhaar)\b", raw_transcript.lower())
+                    )
+                ):
+                    target_pm = op.payment_method
+                    target_ps = op.payment_status
+                    tlow = raw_transcript.lower()
+                    if target_pm is None and target_ps is None:
+                        if re.search(r"\b(online|upi)\b", tlow) and not re.search(r"\b(?:online|upi)\s+(?:se\s+)?nahi\b", tlow):
+                            target_pm = "upi"
+                        elif re.search(r"\bcash\b", tlow) and not re.search(r"\bcash\s+(?:se\s+)?nahi\b", tlow):
+                            target_pm = "cash"
+                        elif re.search(r"\budhaar\b", tlow):
+                            target_ps = "credit"
+                    corr_pay = self.tx.correct_sale_payment(
+                        business_id=business_id,
+                        user_id=user_id,
+                        sale_id=str(sale_id),
+                        operation_id=sub_op_id,
+                        transaction_date=today_str,
+                        new_payment_method=target_pm,
+                        new_payment_status=target_ps,
+                    )
+                    context_state["last_sale_id"] = str(corr_pay["new_sale_id"])
+                    replies.append(
+                        f"Sale payment update ho gaya: ₹{corr_pay['total_amount']:,.0f} ({corr_pay['old_method']} → {corr_pay['new_method']})."
+                    )
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "correction",
+                            "title": "Corrected Sale Payment",
+                            "subtitle": "Previous entry marked corrected (Audit Trail)",
+                            "transactionDate": today_str,
+                            "amountINR": corr_pay["total_amount"],
+                            "lines": [
+                                {"label": "Method", "value": f"{corr_pay['old_method']} → {corr_pay['new_method']}", "tone": "sage"},
+                                {"label": "Amount", "value": f"₹{corr_pay['total_amount']:,.0f}", "tone": "neutral"},
                             ],
                             "status": "corrected",
                         }

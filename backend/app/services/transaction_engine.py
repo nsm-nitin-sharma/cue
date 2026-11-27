@@ -419,6 +419,133 @@ class TransactionEngine:
         ).execute()
         return res.data
 
+    def correct_sale_payment(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        sale_id: str,
+        operation_id: str,
+        transaction_date: str,
+        new_payment_method: str | None = None,
+        new_payment_status: str | None = None,
+    ) -> dict[str, Any]:
+        old_rows = (
+            self.db.table("sales")
+            .select("*")
+            .eq("id", sale_id)
+            .eq("business_id", business_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not old_rows:
+            raise PolicyBlockedError("Previous sale not found to correct.")
+        old = old_rows[0]
+        old_notes = str(old.get("notes") or "")
+        if old.get("payment_status") == "credit":
+            old_method_label = "Udhaar"
+        elif "[ONLINE]" in old_notes or "online" in old_notes.lower():
+            old_method_label = "Online"
+        else:
+            old_method_label = "Cash"
+
+        final_status = "credit" if new_payment_status == "credit" else "paid"
+        if final_status == "credit":
+            new_method_label = "Udhaar"
+            tag = "[UDHAAR]"
+            paid_amt = 0.0
+        elif new_payment_method == "upi":
+            new_method_label = "Online"
+            tag = "[ONLINE]"
+            paid_amt = float(old["total_amount"])
+        elif new_payment_method == "bank":
+            new_method_label = "Bank"
+            tag = "[BANK]"
+            paid_amt = float(old["total_amount"])
+        else:
+            new_method_label = "Cash"
+            tag = "[CASH]"
+            paid_amt = float(old["total_amount"])
+
+        # Adjust customer Udhaar if toggling between paid <-> credit
+        if old.get("customer_id"):
+            old_unpaid = max(0.0, float(old["total_amount"]) - float(old["paid_amount"]))
+            new_unpaid = max(0.0, float(old["total_amount"]) - paid_amt)
+            bal_delta = new_unpaid - old_unpaid
+            if abs(bal_delta) > 0.001:
+                c_rows = (
+                    self.db.table("customers")
+                    .select("outstanding_balance")
+                    .eq("id", old["customer_id"])
+                    .eq("business_id", business_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if c_rows:
+                    updated_bal = max(0.0, float(c_rows[0]["outstanding_balance"]) + bal_delta)
+                    self.db.table("customers").update(
+                        {"outstanding_balance": updated_bal, "updated_at": "now()"}
+                    ).eq("id", old["customer_id"]).eq("business_id", business_id).execute()
+
+        self.db.table("sales").update({"status": "corrected"}).eq("id", sale_id).eq(
+            "business_id", business_id
+        ).execute()
+
+        new_sale = (
+            self.db.table("sales")
+            .insert(
+                {
+                    "business_id": business_id,
+                    "customer_id": old.get("customer_id"),
+                    "total_amount": float(old["total_amount"]),
+                    "paid_amount": paid_amt,
+                    "payment_status": final_status,
+                    "transaction_date": transaction_date,
+                    "status": "active",
+                    "parent_sale_id": sale_id,
+                    "operation_id": operation_id,
+                    "notes": f"{tag} Corrected payment ({old_method_label} -> {new_method_label})",
+                    "created_by": user_id,
+                }
+            )
+            .execute()
+            .data[0]
+        )
+
+        # Copy sale_items to the corrected versioned sale so Revenue & Profit stay accurate
+        items = (
+            self.db.table("sale_items")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("sale_id", sale_id)
+            .execute()
+            .data
+            or []
+        )
+        for it in items:
+            self.db.table("sale_items").insert(
+                {
+                    "business_id": business_id,
+                    "sale_id": new_sale["id"],
+                    "product_id": it["product_id"],
+                    "quantity": float(it["quantity"]),
+                    "unit": it["unit"],
+                    "unit_price": float(it["unit_price"]),
+                    "line_total": float(it["line_total"]),
+                }
+            ).execute()
+
+        return {
+            "new_sale_id": new_sale["id"],
+            "total_amount": float(old["total_amount"]),
+            "old_method": old_method_label,
+            "new_method": new_method_label,
+        }
+
     def issue_confirmation_token(
         self,
         *,

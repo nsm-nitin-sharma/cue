@@ -71,6 +71,7 @@ export interface Sale {
   transactionDate: string;
   status: "active" | "corrected" | "voided";
   operationId: string;
+  notes?: string;
   createdAt: string;
 }
 
@@ -83,6 +84,7 @@ export interface Expense {
   transactionDate: string;
   status: "active" | "corrected" | "voided";
   operationId: string;
+  notes?: string;
   createdAt: string;
 }
 

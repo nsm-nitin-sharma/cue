@@ -32,7 +32,7 @@ export default function SalesPage() {
   );
 
   const summary = useMemo(() => {
-    const active = filteredSales.filter((s) => s.status !== "voided");
+    const active = filteredSales.filter((s) => s.status === "active");
     const totalBilled = active.reduce((acc, s) => acc + s.totalAmount, 0);
     const revenueCollected = active.reduce((acc, s) => acc + s.paidAmount, 0);
     const udhaarPending = Math.max(0, totalBilled - revenueCollected);
@@ -143,7 +143,11 @@ export default function SalesPage() {
                         </td>
                         <td className="py-3.5 px-4">
                           <StatusPill tone={s.paymentStatus === "paid" ? "sage" : "ochre"}>
-                            {s.paymentStatus === "credit" ? "Udhaar" : s.paymentStatus}
+                            {s.paymentStatus === "credit"
+                              ? "Udhaar"
+                              : s.notes?.includes("[ONLINE]")
+                                ? "Online"
+                                : "Cash"}
                           </StatusPill>
                         </td>
                         <td className="py-3.5 px-4 text-right">

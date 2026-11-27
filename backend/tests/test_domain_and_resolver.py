@@ -179,6 +179,14 @@ def test_expenses_and_stock_query_parsing():
     assert corr_prop.operations[0].intent == "correct_last_operation"
     assert corr_prop.operations[0].payment_method == "upi"
 
+    corr_sale_1 = deterministic_fallback_parse("Cash nahi online.", "hinglish")
+    assert corr_sale_1.operations[0].intent == "correct_last_operation"
+    assert corr_sale_1.operations[0].payment_method == "upi"
+
+    corr_sale_2 = deterministic_fallback_parse("Last transaction cash se nahi online hua tha.", "hinglish")
+    assert corr_sale_2.operations[0].intent == "correct_last_operation"
+    assert corr_sale_2.operations[0].payment_method == "upi"
+
     # Single-variant catalog items resolve directly even without size suffix or minor spelling variance
     assert resolve_product("Coca-Cola", PRODUCTS, ALIASES).status == "exact"
     assert resolve_product("Maggie Masala", PRODUCTS, ALIASES).status == "exact"
