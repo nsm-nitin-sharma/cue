@@ -274,3 +274,87 @@
     background-color 300ms ease,
     border-color 300ms ease;
 }
+
+/* Cue Mascot character animations (monochrome / clean neutral shell) */
+@keyframes cueIdleBob {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-2.4px) rotate(1.2deg);
+  }
+}
+
+@keyframes cueListenSway {
+  0%, 100% {
+    transform: translateY(0px) rotate(-1.5deg);
+  }
+  50% {
+    transform: translateY(-2px) rotate(1.5deg);
+  }
+}
+
+@keyframes cueBlink {
+  0%, 44%, 48%, 92%, 96%, 100% {
+    transform: scaleY(1);
+  }
+  46%, 94% {
+    transform: scaleY(0.08);
+  }
+}
+
+@keyframes cueThoughtDot {
+  0%, 100% {
+    transform: translateY(0px) scale(0.9);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateY(-3.5px) scale(1.12);
+    opacity: 1;
+  }
+}
+
+@keyframes cueWaveArc {
+  0%, 100% {
+    opacity: 0.25;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.06);
+  }
+}
+
+.cue-spring-move {
+  transition: transform 460ms cubic-bezier(0.34, 1.48, 0.64, 1), opacity 260ms ease;
+}
+
+.cue-gaze-move {
+  transition: transform 130ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-cue-idle-bob {
+  animation: cueIdleBob 3.4s ease-in-out infinite;
+}
+
+.animate-cue-listen-sway {
+  animation: cueListenSway 1.5s ease-in-out infinite;
+}
+
+.animate-cue-blink {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cueBlink 5.2s ease-in-out infinite;
+}
+
+.animate-cue-thought-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cueThoughtDot 1.3s ease-in-out infinite;
+}
+
+.animate-cue-wave-arc {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cueWaveArc 1.2s ease-in-out infinite;
+}

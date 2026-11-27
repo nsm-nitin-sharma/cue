@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Keyboard, ArrowUp, X, Loader2 } from "lucide-react";
+import { Mic, Keyboard, ArrowUp, X } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { StatusPill } from "@/components/ui/LedgerPrimitives";
 import { stopSpeaking } from "@/lib/tts";
+import { CueMascot, type CueMood } from "@/features/voice/CueMascot";
 
 interface SpeechRecognitionAlternativeLike {
   transcript: string;
@@ -49,7 +50,13 @@ export function LivingAcousticOrb() {
   const [freqBars, setFreqBars] = useState<number[]>([0.2, 0.35, 0.5, 0.35, 0.2]);
   const [showTypeBar, setShowTypeBar] = useState(false);
   const [textInput, setTextInput] = useState("");
+  const [isActivelyTyping, setIsActivelyTyping] = useState(false);
+  const [caretLookX, setCaretLookX] = useState(-0.85);
   const [micError, setMicError] = useState<string | null>(null);
+
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const orbRef = useRef<HTMLButtonElement | null>(null);
+  const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
@@ -295,13 +302,64 @@ export function LivingAcousticOrb() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [cancelRecording, isProcessing, isRecording, showTypeBar, startRecording, stopRecording]);
 
+  const updateCaretGaze = useCallback((el: HTMLInputElement | null) => {
+    if (!el) return;
+    const caretIdx = el.selectionStart ?? el.value.length;
+    const textBefore = el.value.slice(0, caretIdx);
+    const style = window.getComputedStyle(el);
+
+    if (!measureCanvasRef.current && typeof document !== "undefined") {
+      measureCanvasRef.current = document.createElement("canvas");
+    }
+    const ctx = measureCanvasRef.current?.getContext("2d");
+    let textWidthPx = caretIdx * 7.5;
+    if (ctx) {
+      ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      textWidthPx = ctx.measureText(textBefore).width;
+    }
+
+    const inputRect = el.getBoundingClientRect();
+    const padLeft = parseFloat(style.paddingLeft) || 0;
+    const padRight = parseFloat(style.paddingRight) || 0;
+    const innerWidth = Math.max(1, inputRect.width - padLeft - padRight);
+    const localCaretX = Math.max(0, Math.min(innerWidth, textWidthPx - el.scrollLeft));
+    const caretViewportX = inputRect.left + padLeft + localCaretX;
+
+    const orbCenterX = orbRef.current
+      ? orbRef.current.getBoundingClientRect().left + orbRef.current.getBoundingClientRect().width / 2
+      : inputRect.left + inputRect.width / 2;
+
+    const halfSpan = Math.max(110, inputRect.width * 0.48);
+    const ratio = Math.max(-1, Math.min(1, (caretViewportX - orbCenterX) / halfSpan));
+    setCaretLookX(ratio);
+  }, []);
+
   const handleTextSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!textInput.trim()) return;
     const cmd = textInput;
     setTextInput("");
+    setIsActivelyTyping(false);
     await submitCommand(cmd);
   };
+
+  useEffect(() => {
+    if (showTypeBar) {
+      setIsActivelyTyping(true);
+      requestAnimationFrame(() => updateCaretGaze(inputRef.current));
+    } else {
+      setIsActivelyTyping(false);
+      setCaretLookX(0);
+    }
+  }, [showTypeBar, updateCaretGaze]);
+
+  const cueMood: CueMood = isRecording
+    ? "listening"
+    : isProcessing
+      ? "thinking"
+      : showTypeBar && isActivelyTyping
+        ? "typing"
+        : "idle";
 
   const phaseTone =
     voicePhase === "listening"
@@ -314,8 +372,7 @@ export function LivingAcousticOrb() {
             ? "crimson"
             : "neutral";
 
-  const ring1Scale = isRecording ? 1.14 + audioEnergy * 0.36 : 1;
-  const ring2Scale = isRecording ? 1.28 + audioEnergy * 0.58 : 1;
+  const ring1Scale = isRecording ? 1.12 + audioEnergy * 0.28 : 1;
 
   return (
     <div className="relative z-20 pb-5 pt-6 px-4 flex flex-col items-center bg-gradient-to-t from-paper via-paper/95 to-transparent backdrop-blur-[2px]">
@@ -349,10 +406,33 @@ export function LivingAcousticOrb() {
           className="mb-4 w-full max-w-lg flex items-center gap-2 bg-paper-elevated border border-rule-strong rounded-xl p-1.5 pl-3.5 shadow-dock animate-slip-in"
         >
           <input
+            ref={inputRef}
             type="text"
             autoFocus
             value={textInput}
-            onChange={(e) => setTextInput(e.target.value)}
+            onFocus={(e) => {
+              setIsActivelyTyping(true);
+              updateCaretGaze(e.currentTarget);
+            }}
+            onBlur={() => setIsActivelyTyping(false)}
+            onChange={(e) => {
+              setTextInput(e.target.value);
+              setIsActivelyTyping(true);
+              const target = e.currentTarget;
+              updateCaretGaze(target);
+              requestAnimationFrame(() => updateCaretGaze(inputRef.current));
+            }}
+            onKeyUp={(e) => {
+              setIsActivelyTyping(true);
+              updateCaretGaze(e.currentTarget);
+            }}
+            onClick={(e) => {
+              setIsActivelyTyping(true);
+              updateCaretGaze(e.currentTarget);
+            }}
+            onSelect={(e) => {
+              updateCaretGaze(e.currentTarget);
+            }}
             placeholder="Enter Hinglish, Hindi, or English command..."
             className="flex-1 bg-transparent text-sm text-ink placeholder:text-ink-muted focus:outline-none"
           />
@@ -374,40 +454,20 @@ export function LivingAcousticOrb() {
         </form>
       )}
 
-      {/* Precision Enterprise Living Voice Core */}
+      {/* Living Cue Mascot Voice Core (Monochrome Obsidian Portal — No Red/Blue Gradient Halos) */}
       <div className="relative flex items-center justify-center my-1">
         <div className="relative flex items-center justify-center">
-          {/* Fluid Ambient Rotating Halo */}
-          <span
-            className={`absolute -inset-3 rounded-full pointer-events-none transition-all duration-300 ${
-              isProcessing
-                ? "opacity-25 bg-gradient-to-tr from-ochre/25 via-transparent to-vermilion/20 animate-orb-halo"
-                : isRecording
-                  ? "bg-gradient-to-tr from-vermilion/35 via-ochre/20 to-vermilion/35 blur-md"
-                  : "bg-gradient-to-tr from-vermilion/25 via-transparent to-sage/20 blur-[5px] animate-orb-halo"
-            }`}
-            style={
-              isRecording
-                ? { transform: `scale(${ring2Scale})`, opacity: 0.45 + audioEnergy * 0.55 }
-                : undefined
-            }
-          />
-
-          <span
-            className={`absolute ${USE_LARGE_JIGGLY_ORB ? "w-[104px] h-[104px]" : "w-20 h-20"} rounded-full border border-vermilion/25 pointer-events-none transition-transform duration-75 ${
-              isRecording ? "" : "animate-halo-outer"
-            }`}
-            style={isRecording ? { transform: `scale(${ring2Scale})`, opacity: 0.25 + audioEnergy * 0.45 } : undefined}
-          />
-
-          <span
-            className={`absolute ${USE_LARGE_JIGGLY_ORB ? "w-[104px] h-[104px]" : "w-20 h-20"} rounded-full bg-vermilion/10 pointer-events-none transition-transform duration-75 ${
-              isRecording ? "" : "animate-halo-idle"
-            }`}
-            style={isRecording ? { transform: `scale(${ring1Scale})`, opacity: 0.35 + audioEnergy * 0.5 } : undefined}
-          />
+          {/* Subtle neutral monochrome audio ripple only while actively listening */}
+          {isRecording && (
+            <span
+              aria-hidden="true"
+              className="absolute w-[106px] h-[106px] rounded-full border border-ink/20 pointer-events-none transition-transform duration-75"
+              style={{ transform: `scale(${ring1Scale})`, opacity: 0.2 + audioEnergy * 0.5 }}
+            />
+          )}
 
           <button
+            ref={orbRef}
             type="button"
             disabled={isProcessing}
             onClick={isRecording ? stopRecording : startRecording}
@@ -419,57 +479,27 @@ export function LivingAcousticOrb() {
                   : "Start voice command"
             }
             className={`group relative ${
-              USE_LARGE_JIGGLY_ORB
-                ? "w-[96px] h-[96px] orb-spring-transition hover:scale-110 active:scale-90"
-                : "w-[76px] h-[76px] transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out"
-            } rounded-full flex flex-col items-center justify-center overflow-hidden shadow-orb border ${
+              USE_LARGE_JIGGLY_ORB ? "w-[96px] h-[96px]" : "w-[76px] h-[76px]"
+            } rounded-full flex flex-col items-center justify-center overflow-hidden shadow-orb border bg-[#0F172A] text-white orb-spring-transition ${
               isProcessing
-                ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95"
+                ? "border-[#334155] cursor-not-allowed scale-95"
                 : isRecording
-                  ? USE_LARGE_JIGGLY_ORB
-                    ? "bg-vermilion border-vermilion text-white animate-orb-jiggle-active"
-                    : "bg-vermilion border-vermilion text-white scale-105"
-                  : USE_LARGE_JIGGLY_ORB
-                    ? "bg-ink border-ink hover:border-vermilion text-white animate-orb-jiggle"
-                    : "bg-ink border-ink hover:border-vermilion text-white animate-orb-breathe"
+                  ? "border-[#334155] scale-105"
+                  : "border-[#1E293B] hover:border-[#475569] hover:scale-105 active:scale-95"
             }`}
           >
-            {!isProcessing && (
-              <>
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-b from-[#1E293B] to-ink"
-                />
-                <span
-                  aria-hidden="true"
-                  className={`pointer-events-none absolute inset-0 rounded-full bg-gradient-to-b from-vermilion to-[#C93B1F] transition-opacity duration-300 ease-out ${
-                    isRecording ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                  }`}
-                />
-              </>
-            )}
-            {isProcessing ? (
-              <Loader2 className={`relative z-10 ${USE_LARGE_JIGGLY_ORB ? "w-7 h-7" : "w-6 h-6"} animate-spin`} />
-            ) : isRecording ? (
-              <div className={`relative z-10 flex items-center justify-center gap-1 ${USE_LARGE_JIGGLY_ORB ? "h-7" : "h-6"}`}>
-                {freqBars.map((b, i) => (
-                  <span
-                    key={i}
-                    className="w-1 rounded-full bg-white transition-all duration-75"
-                    style={{ height: `${Math.max(6, Math.round(b * (USE_LARGE_JIGGLY_ORB ? 28 : 24)))}px` }}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="relative z-10 flex flex-col items-center justify-center gap-1">
-                <Mic className={`${USE_LARGE_JIGGLY_ORB ? "w-6 h-6" : "w-5 h-5"} stroke-[1.8]`} />
-                <div className={`flex items-end gap-[2px] ${USE_LARGE_JIGGLY_ORB ? "h-2" : "h-1.5"} opacity-75`}>
-                  <span className="w-[2px] h-full rounded-full bg-white/80 animate-orb-wave" style={{ animationDelay: "0ms" }} />
-                  <span className="w-[2px] h-full rounded-full bg-white/95 animate-orb-wave" style={{ animationDelay: "180ms" }} />
-                  <span className="w-[2px] h-full rounded-full bg-white/80 animate-orb-wave" style={{ animationDelay: "360ms" }} />
-                </div>
-              </div>
-            )}
+            {/* Subtle top mic glyph when Cue is idling & peeking from below */}
+            <Mic
+              aria-hidden="true"
+              className={`pointer-events-none absolute top-[15px] z-20 w-[18px] h-[18px] text-white/80 stroke-[1.9] transition-all duration-300 ease-out ${
+                cueMood === "idle"
+                  ? "opacity-90 translate-y-0 scale-100"
+                  : "opacity-0 -translate-y-2 scale-75"
+              }`}
+            />
+
+            {/* Cute Interactive Cue Character */}
+            <CueMascot mood={cueMood} lookX={caretLookX} audioEnergy={audioEnergy} />
           </button>
         </div>
 
