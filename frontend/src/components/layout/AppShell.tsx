@@ -272,7 +272,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-all duration-200 active:scale-[0.97] ${
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-all duration-300 ease-out active:scale-[0.97] ${
                   active
                     ? "bg-paper-elevated text-ink shadow-sm border border-rule/80"
                     : "text-ink-secondary hover:text-ink border border-transparent"

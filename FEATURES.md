@@ -118,9 +118,9 @@
 
 - [x] Warm light aesthetic (`Plus Jakarta Sans` + `Noto Sans Devanagari` + tabular monospace numerals)
 - [x] **Separated Header Controls:** Distinct **Live Status** badge, **Today's Sales** ticker pill, **Store-First Account Popover**, and **Settings** toggle
-- [x] **Pinned Floating Living Acoustic Orb:** Stays cleanly anchored at the bottom above scrolling chat history; features organic breathing/speaking rings, live voice captions, cancel control, and a high-visibility docked **`Type`** command pill (`/` shortcut) right beside the orb (with Test Scenarios chip removed for a cleaner console)
+- [x] **Pinned Floating Living Acoustic Orb:** Stays cleanly anchored at the bottom above scrolling chat history; features organic breathing/speaking rings, smooth vermilion hover cross-fade (`300ms`), live voice captions, cancel control, and a high-visibility docked **`Type`** command pill (`/` shortcut) right beside the orb (with Test Scenarios chip removed for a cleaner console)
 - [x] **Tactile Paper-Slip Receipt Cards:** Instant `Reverse`, confirmation, and status badges directly in chat
-- [x] **Smooth Minimal Transitions:** Fluid animations across tab switches (`Voice`, `Inventory`, `Sales`, `Khata`, `Expenses`, `Reports`), chat history drawer, and settings drawer open/close
+- [x] **Smooth Minimal Transitions:** Fluid eased transitions (`420ms–440ms`) across tab switches (`Voice`, `Inventory`, `Sales`, `Khata`, `Expenses`, `Reports`), chat history drawer, and settings drawer open/close
 - [x] **Two-Finger Horizontal Swipe Tab Navigation:** Swiping left/right with two fingers (on both laptop trackpads and touchscreens) smoothly slides between `Voice ↔ Inventory ↔ Sales ↔ Khata ↔ Expenses ↔ Reports`, with a directional preview badge and table horizontal-scroll protection
 - [x] **Instant Bottom-Anchored Voice Desk:** Switching back to the Voice tab or changing conversation dates opens directly at the latest bottom messages via pre-paint positioning (smooth-scrolling only when new live messages arrive)
 - [x] **Offline Connectivity Resilience:** Empty/silent audio rejection + Browser `IndexedDB` FIFO Offline Queue with automatic chronological sync on reconnect

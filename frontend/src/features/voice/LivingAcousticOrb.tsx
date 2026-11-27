@@ -415,18 +415,32 @@ export function LivingAcousticOrb() {
                   ? "Stop and send voice command"
                   : "Start voice command"
             }
-            className={`relative w-[76px] h-[76px] rounded-full flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-orb border ${
+            className={`group relative w-[76px] h-[76px] rounded-full flex flex-col items-center justify-center overflow-hidden transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out shadow-orb border ${
               isProcessing
                 ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95"
                 : isRecording
-                  ? "bg-gradient-to-b from-vermilion to-[#C93B1F] border-vermilion text-white scale-105"
-                  : "bg-gradient-to-b from-[#1E293B] to-ink hover:from-vermilion hover:to-[#C93B1F] border-ink hover:border-vermilion text-white animate-orb-breathe"
+                  ? "bg-vermilion border-vermilion text-white scale-105"
+                  : "bg-ink border-ink hover:border-vermilion text-white animate-orb-breathe"
             }`}
           >
+            {!isProcessing && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-b from-[#1E293B] to-ink"
+                />
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute inset-0 rounded-full bg-gradient-to-b from-vermilion to-[#C93B1F] transition-opacity duration-300 ease-out ${
+                    isRecording ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                  }`}
+                />
+              </>
+            )}
             {isProcessing ? (
-              <Loader2 className="w-6 h-6 animate-spin" />
+              <Loader2 className="relative z-10 w-6 h-6 animate-spin" />
             ) : isRecording ? (
-              <div className="flex items-center justify-center gap-1 h-6">
+              <div className="relative z-10 flex items-center justify-center gap-1 h-6">
                 {freqBars.map((b, i) => (
                   <span
                     key={i}
@@ -436,7 +450,7 @@ export function LivingAcousticOrb() {
                 ))}
               </div>
             ) : (
-              <div className="relative flex flex-col items-center justify-center gap-0.5">
+              <div className="relative z-10 flex flex-col items-center justify-center gap-0.5">
                 <Mic className="w-5 h-5 stroke-[1.8]" />
                 <div className="flex items-end gap-[2px] h-1.5 opacity-75">
                   <span className="w-[2px] h-full rounded-full bg-white/80 animate-orb-wave" style={{ animationDelay: "0ms" }} />
