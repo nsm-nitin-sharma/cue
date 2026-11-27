@@ -55,7 +55,7 @@ export default function VoiceDeskPage() {
   return (
     <AppShell>
       <div className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 sm:px-8 pt-7 pb-44">
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 sm:px-8 pt-7 pb-6">
           <div className="max-w-2xl mx-auto">
             {activeDate !== todayDate && todayDate && (
               <div className="mb-6 pb-3 border-b border-rule flex items-center justify-between">
@@ -185,10 +185,8 @@ export default function VoiceDeskPage() {
           </div>
         </div>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30">
-          <div className="pointer-events-auto">
-            <LivingAcousticOrb />
-          </div>
+        <div className="shrink-0 z-30 border-t border-rule/60 bg-paper">
+          <LivingAcousticOrb />
         </div>
       </div>
     </AppShell>
