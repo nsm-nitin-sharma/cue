@@ -84,15 +84,37 @@ def parse_indian_number(text: str) -> float | None:
 
 def extract_post_negation_number(text: str) -> float | None:
     """
-    Handles Hinglish corrections such as:
-    '20 pepsi nahi 10 hi biki' -> extracts 10 (after 'nahi'), not 20!
-    '20 ki jagah 10' -> extracts 10!
+    Handles Hinglish/English corrections in both word orders:
+    - Negated first: '20 pepsi nahi 10 hi biki' / 'do nahi, bas ek hi' -> 10 / 1
+    - Negated last:  '2 damaged the, ek nahi' / '2 damaged, not 1' -> 2
+    - Context lot + correction: 'jo 14 aaye the, unme se 2 damaged the, ek nahi' -> 2
     """
     lower = text.lower()
-    parts = re.split(r"\b(?:nahi|nahin|ki\s+jagah|instead\s+of|balki)\b", lower)
+    num_tok = r"(?:\d+(?:\.\d+)?|" + "|".join(sorted(_WORD_NUMBERS.keys(), key=len, reverse=True)) + r")"
+    cleaned = re.sub(rf"\bnot\s+{num_tok}\b", " ", lower)
+    parts = re.split(r"\b(?:nahi|nahin|ki\s+jagah|instead\s+of|balki)\b", cleaned)
     if len(parts) > 1:
-        after_neg = parts[-1]
-        val = parse_indian_number(after_neg)
+        after_neg = parts[-1].strip(" ,.!?")
+        if after_neg:
+            val = parse_indian_number(after_neg)
+            if val is not None:
+                return val
+        without_negated = re.sub(rf"\b{num_tok}\s*(?:hi\s+)?(?:nahi|nahin)\b", " ", cleaned)
+        lot_m = re.search(r"\b(?:unme|unmein|usme|usmein|inme|inmein|isme|ismein)\s+(?:se\s+)?(.+)$", without_negated)
+        if lot_m:
+            val = parse_indian_number(lot_m.group(1))
+            if val is not None:
+                return val
+        val = parse_indian_number(without_negated)
+        if val is not None:
+            return val
+    elif cleaned != lower:
+        lot_m = re.search(r"\b(?:unme|unmein|usme|usmein|inme|inmein|isme|ismein)\s+(?:se\s+)?(.+)$", cleaned)
+        if lot_m:
+            val = parse_indian_number(lot_m.group(1))
+            if val is not None:
+                return val
+        val = parse_indian_number(cleaned)
         if val is not None:
             return val
     return parse_indian_number(text)

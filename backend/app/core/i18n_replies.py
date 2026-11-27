@@ -144,6 +144,18 @@ _WORD_MAP: dict[str, str] = {
     "ढाई": "dhai",
     "आधा": "aadha",
     "डेढ़": "dedh",
+    "डेमिस": "damaged",
+    "डैमेज": "damaged",
+    "डैमेज्ड": "damaged",
+    "खराब": "kharab",
+    "एक्सपायर": "expired",
+    "एक्सपायर्ड": "expired",
+    "बस": "bas",
+    "ही": "hi",
+    "जो": "jo",
+    "उन": "un",
+    "उनमें": "unme",
+    "आये": "aaye",
 }
 
 _VOWELS = {
@@ -268,6 +280,18 @@ _EN_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r"^Sale correct ho gayi: ([\d.]+) se ([\d.]+) \((₹[\d,]+)\)\. Audit trail updated\.$"),
         r"Corrected sale quantity from \1 to \2 (\3). Audit trail updated.",
+    ),
+    (
+        re.compile(r"^([\d.]+) (.+?) (damage|expiry) mark ho gaya\. Remaining stock: ([\d.]+)\.$"),
+        r"Marked \1 \2 as \3. Remaining stock: \4.",
+    ),
+    (
+        re.compile(r"^(.+?) ka (damage|expiry) update ho gaya: ([\d.]+) se ([\d.]+)\. Remaining stock: ([\d.]+)\.$"),
+        r"Updated \2 for \1 from \3 to \4. Remaining stock: \5.",
+    ),
+    (
+        re.compile(r"^(.+?) ka stock receive update ho gaya: ([\d.]+) se ([\d.]+) \(Rate (₹[\d,]+)\)\. Remaining stock: ([\d.]+)\.$"),
+        r"Updated stock receipt for \1 from \2 to \3 (Rate \4). Remaining stock: \5.",
     ),
     (
         re.compile(r"^(.+?) inventory mein nahi mila — kya naya product add karun\?$"),

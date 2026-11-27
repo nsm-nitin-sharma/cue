@@ -13,7 +13,14 @@ export default function InventoryPage() {
     useCueWorkspace();
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<"stock" | "movements" | "losses">("stock");
-  const lossMovements = movements.filter((m) => m.movementType === "damage" || m.movementType === "expiry");
+  const reversedMovementIds = new Set(
+    movements
+      .filter((m) => m.movementType === "reversal" && m.referenceId)
+      .map((m) => m.referenceId as string)
+  );
+  const lossMovements = movements.filter(
+    (m) => (m.movementType === "damage" || m.movementType === "expiry") && !reversedMovementIds.has(m.id)
+  );
   const damagedCount = lossMovements
     .filter((m) => m.movementType === "damage")
     .reduce((acc, m) => acc + Math.abs(m.quantityDelta), 0);

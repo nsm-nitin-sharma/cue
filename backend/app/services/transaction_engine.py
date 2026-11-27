@@ -233,6 +233,321 @@ class TransactionEngine:
                 raise InsufficientStockError(avail, product_name) from exc
             raise
 
+    def _reversed_movement_ids(self, business_id: str) -> set[str]:
+        rev_rows = (
+            self.db.table("inventory_movements")
+            .select("reference_id")
+            .eq("business_id", business_id)
+            .eq("movement_type", "reversal")
+            .execute()
+            .data
+            or []
+        )
+        return {str(r["reference_id"]) for r in rev_rows if r.get("reference_id")}
+
+    def _find_active_movement(
+        self,
+        *,
+        business_id: str,
+        movement_types: tuple[str, ...],
+        operation_id: str | None = None,
+        product_id: str | None = None,
+        transaction_date: str | None = None,
+    ) -> dict[str, Any] | None:
+        reversed_ids = self._reversed_movement_ids(business_id)
+        q = (
+            self.db.table("inventory_movements")
+            .select("*")
+            .eq("business_id", business_id)
+            .in_("movement_type", list(movement_types))
+        )
+        if operation_id:
+            q = q.eq("operation_id", operation_id)
+        if product_id:
+            q = q.eq("product_id", product_id)
+        if transaction_date:
+            q = q.eq("transaction_date", transaction_date)
+        rows = q.order("created_at", desc=True).limit(25).execute().data or []
+        for row in rows:
+            if str(row["id"]) not in reversed_ids:
+                return row
+        return None
+
+    def find_latest_active_loss_movement(
+        self,
+        *,
+        business_id: str,
+        product_id: str | None = None,
+        movement_type: str | None = None,
+        transaction_date: str | None = None,
+    ) -> dict[str, Any] | None:
+        types = (movement_type,) if movement_type in {"damage", "expiry"} else ("damage", "expiry")
+        return self._find_active_movement(
+            business_id=business_id,
+            movement_types=types,
+            product_id=product_id,
+            transaction_date=transaction_date,
+        )
+
+    def _resolve_target_movement(
+        self,
+        *,
+        business_id: str,
+        movement_types: tuple[str, ...],
+        old_operation_id: str | None,
+        product_id: str | None,
+    ) -> dict[str, Any] | None:
+        if old_operation_id:
+            mv = self._find_active_movement(
+                business_id=business_id,
+                movement_types=movement_types,
+                operation_id=old_operation_id,
+                product_id=product_id,
+            )
+            if mv is not None:
+                return mv
+        return self._find_active_movement(
+            business_id=business_id,
+            movement_types=movement_types,
+            product_id=product_id,
+        )
+
+    def _load_product_and_stock(
+        self, *, business_id: str, product_id: str, fallback_unit: str | None
+    ) -> tuple[str, str, float]:
+        prod_rows = (
+            self.db.table("products")
+            .select("name, base_unit")
+            .eq("id", product_id)
+            .eq("business_id", business_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        prod_name = str(prod_rows[0]["name"]) if prod_rows else "Item"
+        unit = str(fallback_unit or (prod_rows[0]["base_unit"] if prod_rows else "piece"))
+        inv_rows = (
+            self.db.table("inventory")
+            .select("current_quantity")
+            .eq("business_id", business_id)
+            .eq("product_id", product_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        before_stock = float(inv_rows[0]["current_quantity"]) if inv_rows else 0.0
+        return prod_name, unit, before_stock
+
+    def _apply_movement_correction(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        mv: dict[str, Any],
+        product_id: str,
+        product_name: str,
+        unit: str,
+        before_stock: float,
+        new_stock_delta: float,
+        reversal_delta: float,
+        new_movement_delta: float,
+        new_unit_cost: float | None,
+        old_unit_cost: float | None,
+        operation_id: str,
+        transaction_date: str,
+        reversal_note: str,
+        new_note: str,
+    ) -> float:
+        after_stock = before_stock + new_stock_delta
+        if after_stock < 0:
+            raise InsufficientStockError(before_stock, product_name)
+
+        self.db.table("inventory").update(
+            {"current_quantity": after_stock, "updated_at": "now()"}
+        ).eq("business_id", business_id).eq("product_id", product_id).execute()
+
+        rev_row: dict[str, Any] = {
+            "business_id": business_id,
+            "product_id": product_id,
+            "movement_type": "reversal",
+            "quantity_delta": reversal_delta,
+            "unit": unit,
+            "reference_type": "reversal",
+            "reference_id": mv["id"],
+            "operation_id": operation_id,
+            "transaction_date": transaction_date,
+            "notes": reversal_note,
+            "created_by": user_id,
+        }
+        if old_unit_cost is not None:
+            rev_row["unit_cost"] = old_unit_cost
+        self.db.table("inventory_movements").insert(rev_row).execute()
+
+        if abs(new_movement_delta) > 1e-6:
+            new_row: dict[str, Any] = {
+                "business_id": business_id,
+                "product_id": product_id,
+                "movement_type": str(mv["movement_type"]),
+                "quantity_delta": new_movement_delta,
+                "unit": unit,
+                "reference_type": "voice_correction",
+                "reference_id": mv["id"],
+                "operation_id": operation_id,
+                "transaction_date": transaction_date,
+                "notes": new_note,
+                "created_by": user_id,
+            }
+            if new_unit_cost is not None:
+                new_row["unit_cost"] = new_unit_cost
+            self.db.table("inventory_movements").insert(new_row).execute()
+
+        self.db.table("voice_transactions").update({"validation_status": "corrected"}).eq(
+            "business_id", business_id
+        ).eq("operation_id", mv["operation_id"]).execute()
+        return after_stock
+
+    def correct_damage_or_expiry(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        new_quantity: float,
+        operation_id: str,
+        transaction_date: str,
+        old_operation_id: str | None = None,
+        product_id: str | None = None,
+        movement_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically reverse prior damage/expiry movement and log the corrected count."""
+        types = (movement_type,) if movement_type in {"damage", "expiry"} else ("damage", "expiry")
+        mv = self._resolve_target_movement(
+            business_id=business_id,
+            movement_types=types,
+            old_operation_id=old_operation_id,
+            product_id=product_id,
+        )
+        if mv is None:
+            raise PolicyBlockedError("Previous damage or expiry record not found to correct.")
+
+        pid = str(mv["product_id"])
+        mtype = str(mv["movement_type"])
+        old_qty = abs(float(mv["quantity_delta"]))
+        prod_name, unit, before_stock = self._load_product_and_stock(
+            business_id=business_id, product_id=pid, fallback_unit=mv.get("unit")
+        )
+        if abs(float(new_quantity) - old_qty) < 1e-6:
+            return {
+                "product_id": pid,
+                "product_name": prod_name,
+                "movement_type": mtype,
+                "unit": unit,
+                "old_quantity": old_qty,
+                "new_quantity": float(new_quantity),
+                "before_stock": before_stock,
+                "after_stock": before_stock,
+                "stock_delta": 0.0,
+                "new_operation_id": str(mv["operation_id"]),
+                "unchanged": True,
+            }
+
+        stock_delta = old_qty - float(new_quantity)
+        after_stock = self._apply_movement_correction(
+            business_id=business_id,
+            user_id=user_id,
+            mv=mv,
+            product_id=pid,
+            product_name=prod_name,
+            unit=unit,
+            before_stock=before_stock,
+            new_stock_delta=stock_delta,
+            reversal_delta=old_qty,
+            new_movement_delta=-float(new_quantity) if new_quantity > 0 else 0.0,
+            new_unit_cost=None,
+            old_unit_cost=None,
+            operation_id=operation_id,
+            transaction_date=transaction_date,
+            reversal_note=f"Corrected {mtype} ({old_qty:g} -> {float(new_quantity):g})",
+            new_note=f"Corrected {mtype}: {float(new_quantity):g} (was {old_qty:g})",
+        )
+        return {
+            "product_id": pid,
+            "product_name": prod_name,
+            "movement_type": mtype,
+            "unit": unit,
+            "old_quantity": old_qty,
+            "new_quantity": float(new_quantity),
+            "before_stock": before_stock,
+            "after_stock": after_stock,
+            "stock_delta": stock_delta,
+            "new_operation_id": operation_id,
+            "unchanged": False,
+        }
+
+    def correct_stock_receive(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        operation_id: str,
+        transaction_date: str,
+        old_operation_id: str | None = None,
+        product_id: str | None = None,
+        new_quantity: float | None = None,
+        new_unit_cost: float | None = None,
+    ) -> dict[str, Any]:
+        """Atomically reverse prior receive movement and log the corrected quantity/cost."""
+        mv = self._resolve_target_movement(
+            business_id=business_id,
+            movement_types=("receive",),
+            old_operation_id=old_operation_id,
+            product_id=product_id,
+        )
+        if mv is None:
+            raise PolicyBlockedError("Previous stock receive record not found to correct.")
+
+        pid = str(mv["product_id"])
+        old_qty = float(mv["quantity_delta"])
+        old_cost = float(mv.get("unit_cost") or 0)
+        final_qty = float(new_quantity) if new_quantity is not None else old_qty
+        final_cost = float(new_unit_cost) if new_unit_cost is not None else old_cost
+        prod_name, unit, before_stock = self._load_product_and_stock(
+            business_id=business_id, product_id=pid, fallback_unit=mv.get("unit")
+        )
+        stock_delta = final_qty - old_qty
+        after_stock = self._apply_movement_correction(
+            business_id=business_id,
+            user_id=user_id,
+            mv=mv,
+            product_id=pid,
+            product_name=prod_name,
+            unit=unit,
+            before_stock=before_stock,
+            new_stock_delta=stock_delta,
+            reversal_delta=-old_qty,
+            new_movement_delta=final_qty if final_qty > 0 else 0.0,
+            new_unit_cost=final_cost,
+            old_unit_cost=old_cost,
+            operation_id=operation_id,
+            transaction_date=transaction_date,
+            reversal_note=f"Corrected receive ({old_qty:g} -> {final_qty:g})",
+            new_note=f"Corrected receive: {final_qty:g} @ ₹{final_cost:g}",
+        )
+        return {
+            "product_id": pid,
+            "product_name": prod_name,
+            "unit": unit,
+            "old_quantity": old_qty,
+            "new_quantity": final_qty,
+            "old_cost": old_cost,
+            "new_cost": final_cost,
+            "before_stock": before_stock,
+            "after_stock": after_stock,
+            "stock_delta": stock_delta,
+            "new_operation_id": operation_id,
+        }
+
     def record_sale(
         self,
         *,

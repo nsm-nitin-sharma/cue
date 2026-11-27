@@ -484,6 +484,8 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
             quantityDelta: Number(m.quantity_delta ?? 0),
             unit: (m.unit as BaseUnit) ?? "piece",
             unitCost: m.unit_cost !== null && m.unit_cost !== undefined ? Number(m.unit_cost) : undefined,
+            referenceType: m.reference_type ? String(m.reference_type) : undefined,
+            referenceId: m.reference_id ? String(m.reference_id) : undefined,
             transactionDate: String(m.transaction_date),
             notes: String(m.notes ?? ""),
             operationId: String(m.operation_id),

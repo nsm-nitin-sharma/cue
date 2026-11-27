@@ -37,6 +37,8 @@ export interface InventoryMovement {
   quantityDelta: number;
   unit: BaseUnit;
   unitCost?: number;
+  referenceType?: string;
+  referenceId?: string;
   transactionDate: string; // YYYY-MM-DD (Asia/Kolkata)
   notes: string;
   operationId: string;
