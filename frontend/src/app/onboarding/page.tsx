@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, ArrowRight, Store } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
-import { onboardStoreRemote } from "@/lib/api";
+import { fetchWorkspaceBootstrap, onboardStoreRemote } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { SubscriptionTierCode } from "@/types/cue";
 
@@ -64,11 +64,42 @@ const PLANS: {
 export default function OnboardingPage() {
   const router = useRouter();
   const { store, authUser, setStoreTier, updateStoreProfile, refreshWorkspace } = useCueWorkspace();
+  const [checkingStore, setCheckingStore] = useState(true);
   const [selectedTier, setSelectedTier] = useState<SubscriptionTierCode>(store.tier);
   const [storeName, setStoreName] = useState(store.name === "My Store" ? "" : store.name);
   const [ownerName, setOwnerName] = useState(authUser?.name || store.ownerName || "");
   const [city, setCity] = useState(store.city || "");
   const [seedSampleCatalog, setSeedSampleCatalog] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    async function verifyOnboardingNeeded() {
+      if (!supabase) {
+        if (active) setCheckingStore(false);
+        return;
+      }
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data.session) {
+          try {
+            await fetchWorkspaceBootstrap();
+            await refreshWorkspace();
+            router.replace("/");
+            return;
+          } catch {
+            // Signed in, no store yet -> show onboarding
+          }
+        }
+      } catch {
+        // Offline/local fallback
+      }
+      if (active) setCheckingStore(false);
+    }
+    verifyOnboardingNeeded();
+    return () => {
+      active = false;
+    };
+  }, [refreshWorkspace, router]);
 
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,6 +123,14 @@ export default function OnboardingPage() {
     }
     router.push("/");
   };
+
+  if (checkingStore) {
+    return (
+      <div className="min-h-screen bg-paper flex items-center justify-center text-xs font-mono text-ink-muted">
+        Opening your store...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-paper py-8 px-4 sm:px-8">

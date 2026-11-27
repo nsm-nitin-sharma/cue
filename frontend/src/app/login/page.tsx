@@ -55,11 +55,28 @@ export default function LoginPage() {
     setMessage(null);
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
+        if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+          setMode("signin");
+          setMessage({
+            tone: "crimson",
+            text: "An account with this email is already registered. Please sign in instead.",
+          });
+          return;
+        }
+        if (data.session) {
+          try {
+            await fetchWorkspaceBootstrap();
+            router.replace("/");
+          } catch {
+            router.replace("/onboarding");
+          }
+          return;
+        }
         setMessage({
           tone: "sage",
-          text: "Account created! Check your inbox if email confirmation is enabled, or continue to plan setup.",
+          text: "Account created! Check your inbox to confirm your email, then sign in.",
         });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
