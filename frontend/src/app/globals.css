@@ -358,3 +358,18 @@
   transform-origin: center;
   animation: cueWaveArc 1.2s ease-in-out infinite;
 }
+
+@keyframes cueBellSwing {
+  0%, 100% {
+    transform: rotate(-10deg);
+  }
+  50% {
+    transform: rotate(10deg);
+  }
+}
+
+.animate-cue-bell {
+  transform-box: fill-box;
+  transform-origin: top center;
+  animation: cueBellSwing 0.9s ease-in-out infinite;
+}
