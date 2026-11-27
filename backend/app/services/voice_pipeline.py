@@ -1631,13 +1631,24 @@ class VoicePipelineService:
             context_state=ctx,
         )
         self.memory.update_context_state(conversation_id=conv["id"], state=ctx)
-        return VoiceTurnResult(
+        res = VoiceTurnResult(
             operation_id=req.operation_id,
             status="executed",
             transcript="Confirmed",
             reply=reply,
             receipts=[slip],
         )
+        self.memory.append_message(
+            conversation_id=conv["id"],
+            business_id=business_id,
+            conversation_date=today_str,
+            role="assistant",
+            content=res.reply,
+            language="hinglish",
+            linked_operation_id=req.operation_id,
+            ui_payload=res.model_dump(),
+        )
+        return res
 
     def create_product_and_execute(
         self,
@@ -1647,8 +1658,10 @@ class VoicePipelineService:
         req: CreateProductAndExecuteRequest,
     ) -> VoiceTurnResult:
         biz, _ = self._load_business_and_sub(business_id)
-        today_str = get_business_today(biz.get("timezone", "Asia/Kolkata")).isoformat()
-        created = self.tx.create_product_and_stock(
+        tz_name = biz.get("timezone", "Asia/Kolkata")
+        today_str = get_business_today(tz_name).isoformat()
+        conv = self.memory.get_or_create_day_conversation(business_id=business_id, timezone_name=tz_name)
+        self.tx.create_product_and_stock(
             business_id=business_id,
             user_id=user_id,
             name=req.name,
@@ -1677,13 +1690,24 @@ class VoicePipelineService:
             "status": "saved",
             "reversible": True,
         }
-        return VoiceTurnResult(
+        res = VoiceTurnResult(
             operation_id=req.operation_id,
             status="executed",
             transcript=f"Add {req.name}",
             reply=reply,
             receipts=[slip],
         )
+        self.memory.append_message(
+            conversation_id=conv["id"],
+            business_id=business_id,
+            conversation_date=today_str,
+            role="assistant",
+            content=res.reply,
+            language="hinglish",
+            linked_operation_id=req.operation_id,
+            ui_payload=res.model_dump(),
+        )
+        return res
 
     def _finalize_turn(
         self,
