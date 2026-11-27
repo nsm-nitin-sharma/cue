@@ -371,5 +371,95 @@
 .animate-cue-bell {
   transform-box: fill-box;
   transform-origin: top center;
-  animation: cueBellSwing 0.9s ease-in-out infinite;
+  animation: cueBellSwing 0.55s ease-in-out infinite;
+}
+
+/* Signature Classic Bunny ("Cue"): gentle ear twitch */
+@keyframes cueBunnyEarTwitch {
+  0%, 72%, 100% { transform: rotate(0deg); }
+  78% { transform: rotate(-9deg); }
+  84% { transform: rotate(3deg); }
+  90% { transform: rotate(-6deg); }
+}
+.animate-cue-ear-twitch {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: cueBunnyEarTwitch 4.2s ease-in-out infinite;
+}
+
+/* Signature Fox ("Kiko"): sneaky side prowl & tail swish */
+@keyframes foxProwlIdle {
+  0%, 100% { transform: translate(-4px, 0px) rotate(-4deg); }
+  50% { transform: translate(4px, -1.5px) rotate(3deg); }
+}
+@keyframes foxTailWag {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(10deg); }
+}
+.animate-fox-prowl {
+  animation: foxProwlIdle 3.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+.animate-fox-tail {
+  transform-box: fill-box;
+  transform-origin: bottom left;
+  animation: foxTailWag 1.4s ease-in-out infinite;
+}
+
+/* Signature Owl ("Ollie"): rhythmic owl neck micro-ticks & wise tilt */
+@keyframes owlPerchIdle {
+  0%, 36%, 100% { transform: rotate(0deg) translateY(0px); }
+  42%, 58% { transform: rotate(-5deg) translateY(-1px); }
+  66%, 82% { transform: rotate(5deg) translateY(-1px); }
+}
+@keyframes owlListenHover {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-2.5px) scale(1.03); }
+}
+.animate-owl-perch {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: owlPerchIdle 5.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+.animate-owl-hover {
+  animation: owlListenHover 1.9s ease-in-out infinite;
+}
+
+/* Signature Axolotl ("Bloop"): underwater float, jelly squish, gill flutter & bubbles */
+@keyframes axolotlFloat {
+  0%, 100% { transform: translate(0px, 0px) rotate(-2deg); }
+  33% { transform: translate(2.5px, -3px) rotate(2deg); }
+  66% { transform: translate(-2.5px, -1.5px) rotate(-1deg); }
+}
+@keyframes axolotlJellyListen {
+  0%, 100% { transform: scale(1, 1) translateY(0px); }
+  35% { transform: scale(1.07, 0.94) translateY(1.5px); }
+  70% { transform: scale(0.95, 1.06) translateY(-3px); }
+}
+@keyframes bloopBubbleRise {
+  0% { transform: translateY(0px) scale(0.75); opacity: 0; }
+  25% { opacity: 0.75; }
+  85% { opacity: 0.55; }
+  100% { transform: translateY(-14px) scale(1.1); opacity: 0; }
+}
+@keyframes bloopGillFlutter {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(6deg); }
+}
+.animate-axolotl-float {
+  animation: axolotlFloat 3.6s ease-in-out infinite;
+}
+.animate-axolotl-jelly {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: axolotlJellyListen 1.25s ease-in-out infinite;
+}
+.animate-bloop-bubble {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: bloopBubbleRise 2.4s ease-out infinite;
+}
+.animate-bloop-gill {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: bloopGillFlutter 0.75s ease-in-out infinite;
 }

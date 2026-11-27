@@ -178,8 +178,10 @@ export function CueMascotClassic({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
             </g>
 
             <g className="cue-spring-move" style={{ transform: earRightTransform, transformOrigin: "74px 47px" }}>
-              <ellipse cx="77.5" cy="46.5" rx="7.5" ry="12.5" fill={`url(#${bodyId})`} />
-              <ellipse cx="76.8" cy="47" rx="4" ry="8" fill={`url(#${earId})`} />
+              <g className={mood === "idle" ? "animate-cue-ear-twitch" : ""}>
+                <ellipse cx="77.5" cy="46.5" rx="7.5" ry="12.5" fill={`url(#${bodyId})`} />
+                <ellipse cx="76.8" cy="47" rx="4" ry="8" fill={`url(#${earId})`} />
+              </g>
             </g>
 
             <path

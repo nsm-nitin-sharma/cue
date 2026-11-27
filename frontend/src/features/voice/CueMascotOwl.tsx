@@ -16,32 +16,34 @@ export function CueMascotOwl({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
   const faceId = `${uid}-face`;
   const clampedX = Math.max(-1, Math.min(1, lookX));
 
+  // Owl Choreography: calm perched micro-swivel in idle, level neck-glide in typing, hovering wing-cup in listening
   const stageTransform =
     mood === "idle"
       ? "translate(0px, 34px) scale(0.95)"
       : mood === "typing"
-        ? `translate(${(clampedX * 2.2).toFixed(2)}px, 16px) scale(0.98)`
+        ? `translate(${(clampedX * 2.5).toFixed(2)}px, 16px) scale(0.98)`
         : mood === "listening"
-          ? `translate(0px, 5px) scale(${(1 + audioEnergy * 0.05).toFixed(3)})`
+          ? `translate(0px, 5px) scale(${(1 + audioEnergy * 0.045).toFixed(3)})`
           : "translate(-2px, 8px) scale(0.97)";
 
+  // Owls keep head level while swiveling glasses horizontally toward text caret!
   const headTransform =
     mood === "typing"
-      ? `translate(${(clampedX * 1.5).toFixed(2)}px, -1px) rotate(${(clampedX * 8).toFixed(2)}deg)`
+      ? `translate(${(clampedX * 3.4).toFixed(2)}px, -1.5px) rotate(${(clampedX * 3.5).toFixed(2)}deg)`
       : mood === "thinking"
-        ? "translate(-1px, 0px) rotate(-10deg)"
+        ? "translate(-1px, 0px) rotate(-11deg)"
         : mood === "listening"
           ? "translate(0px, -1px) rotate(0deg)"
           : "translate(0px, 0px) rotate(0deg)";
 
   const pupilTransform =
     mood === "typing"
-      ? `translate(${(clampedX * 3.8).toFixed(2)}px, -3.1px)`
+      ? `translate(${(clampedX * 4).toFixed(2)}px, -3.2px)`
       : mood === "thinking"
-        ? "translate(-2.4px, -2.4px)"
+        ? "translate(-2.4px, -2.2px)"
         : mood === "listening"
           ? "translate(0px, -0.6px) scale(1.08)"
-          : "translate(0px, -0.2px)";
+          : "translate(0px, 0px)";
 
   const leftTuftTransform =
     mood === "listening"
@@ -120,35 +122,34 @@ export function CueMascotOwl({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
         />
       )}
 
-      {/* Subtle acoustic ripples beside ear-tufts when listening */}
+      {/* Warm golden hoot-wave ripples beside ear-tufts when listening */}
       {mood === "listening" && (
-        <g stroke="#CCFBF1" strokeLinecap="round" fill="none">
+        <g stroke="#FDE68A" strokeLinecap="round" fill="none">
           <path
             d="M 10 21 Q 6 27 10 33"
             strokeWidth="1.6"
             className="animate-cue-wave-arc"
-            style={{ opacity: 0.35 + audioEnergy * 0.6 }}
+            style={{ opacity: 0.4 + audioEnergy * 0.55 }}
           />
           <path
             d="M 90 21 Q 94 27 90 33"
             strokeWidth="1.6"
             className="animate-cue-wave-arc"
-            style={{ opacity: 0.35 + audioEnergy * 0.6, animationDelay: "200ms" }}
+            style={{ opacity: 0.4 + audioEnergy * 0.55, animationDelay: "220ms" }}
           />
         </g>
       )}
 
-      {/* Bouncing thought dots top-right while processing */}
+      {/* Golden wisdom diamond sparks while thinking */}
       {mood === "thinking" && (
-        <g>
-          <circle cx="72" cy="25" r="1.9" fill="#FEF3C7" className="animate-cue-thought-dot" style={{ animationDelay: "0ms" }} />
-          <circle cx="77" cy="19.5" r="2.5" fill="#FEFCE8" className="animate-cue-thought-dot" style={{ animationDelay: "180ms" }} />
-          <circle cx="81" cy="14.5" r="3.1" fill="#FFFFFF" className="animate-cue-thought-dot" style={{ animationDelay: "360ms" }} />
+        <g fill="#FBBF24">
+          <path d="M 73 22.5 L 75 25 L 73 27.5 L 71 25 Z" className="animate-cue-thought-dot" style={{ animationDelay: "0ms" }} />
+          <path d="M 79 14.5 L 82 18 L 79 21.5 L 76 18 Z" className="animate-cue-thought-dot" style={{ animationDelay: "220ms" }} />
         </g>
       )}
 
       <g className="cue-spring-move" style={{ transform: stageTransform, transformOrigin: "50px 55px" }}>
-        <g className={mood === "idle" ? "animate-cue-idle-bob" : mood === "listening" ? "animate-cue-listen-sway" : ""}>
+        <g className={mood === "idle" ? "animate-owl-perch" : mood === "listening" ? "animate-owl-hover" : ""}>
           {/* Plump Pear-Shaped Teal Owl Torso */}
           <path d="M 27 100 C 27 65 36 58 50 58 C 64 58 73 65 73 100 Z" fill={`url(#${featherId})`} />
 
@@ -198,11 +199,15 @@ export function CueMascotOwl({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
 
             <g className="animate-cue-blink">
               <circle cx="61" cy="45" r="5.5" fill="#FFFFFF" />
-              <g className="cue-gaze-move" style={{ transform: pupilTransform, transformOrigin: "61px 45px" }}>
-                <circle cx="61" cy="45" r="4.1" fill="#0F172A" />
-                <circle cx="59.6" cy="43.3" r="1.45" fill="#FFFFFF" />
-                <circle cx="62.6" cy="46.5" r="0.65" fill="#FFFFFF" opacity="0.85" />
-              </g>
+              {mood === "thinking" ? (
+                <path d="M 56.8 45.2 Q 61 42.2 65.2 45.2" fill="none" stroke="#0F172A" strokeWidth="2.1" strokeLinecap="round" />
+              ) : (
+                <g className="cue-gaze-move" style={{ transform: pupilTransform, transformOrigin: "61px 45px" }}>
+                  <circle cx="61" cy="45" r="4.1" fill="#0F172A" />
+                  <circle cx="59.6" cy="43.3" r="1.45" fill="#FFFFFF" />
+                  <circle cx="62.6" cy="46.5" r="0.65" fill="#FFFFFF" opacity="0.85" />
+                </g>
+              )}
             </g>
 
             {/* Iconic Brushed-Gold Reading Spectacles */}

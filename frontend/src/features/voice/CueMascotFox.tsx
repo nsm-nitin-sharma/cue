@@ -15,73 +15,73 @@ export function CueMascotFox({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
   const creamId = `${uid}-cream`;
   const clampedX = Math.max(-1, Math.min(1, lookX));
 
-  // Vertical stage position inside the 100x100 circular portal
+  // Fox Choreography: sneaky prowl idle, low crouch slide on typing, keen angled listening, swishing tail think
   const stageTransform =
     mood === "idle"
       ? "translate(0px, 34px) scale(0.95)"
       : mood === "typing"
-        ? `translate(${(clampedX * 2.2).toFixed(2)}px, 16px) scale(0.98)`
+        ? `translate(${(clampedX * 5.2).toFixed(2)}px, 19px) scale(0.97)`
         : mood === "listening"
           ? `translate(0px, 5px) scale(${(1 + audioEnergy * 0.05).toFixed(3)})`
           : "translate(-2px, 8px) scale(0.97)";
 
-  // Head tilt follows text cursor when typing, tilts curiously when thinking
+  // Alert fox angles head keenly when listening, stays sleek & focused along crouch when typing
   const headTransform =
     mood === "typing"
-      ? `translate(${(clampedX * 1.6).toFixed(2)}px, -1px) rotate(${(clampedX * 8).toFixed(2)}deg)`
+      ? `translate(${(clampedX * 2).toFixed(2)}px, -1px) rotate(${(clampedX * 4.5).toFixed(2)}deg)`
       : mood === "thinking"
-        ? "translate(-1px, 0px) rotate(-9deg)"
+        ? "translate(-1px, 0px) rotate(-11deg)"
         : mood === "listening"
-          ? "translate(0px, -1px) rotate(0deg)"
+          ? "translate(0px, -1px) rotate(-4deg)"
           : "translate(0px, 0px) rotate(0deg)";
 
   // Expressive eye pupil offset
   const pupilTransform =
     mood === "typing"
-      ? `translate(${(clampedX * 4.2).toFixed(2)}px, -3.4px)`
+      ? `translate(${(clampedX * 4.6).toFixed(2)}px, -3.6px)`
       : mood === "thinking"
-        ? "translate(-2.5px, -2.5px)"
+        ? "translate(2.5px, -2.5px)"
         : mood === "listening"
           ? "translate(0px, -0.7px) scale(1.07)"
           : "translate(0px, -0.3px)";
 
-  // Pointed triangular ear reactions (lop-ear droop on left when thinking!)
+  // Pointed triangular ear reactions (swept back when prowling/typing, left ear flopped flat when thinking)
   const leftEarTransform =
     mood === "thinking"
-      ? "rotate(-34deg) translate(-2px, 2px)"
+      ? "rotate(-42deg) translate(-3px, 3px)"
       : mood === "listening"
-        ? "rotate(-10deg) scale(1.05)"
+        ? "rotate(-12deg) scale(1.06)"
         : mood === "typing"
-          ? `rotate(${(clampedX * 4).toFixed(1)}deg)`
-          : "rotate(-4deg)";
+          ? "rotate(-2deg) scale(1.02)"
+          : "rotate(-9deg)";
 
   const rightEarTransform =
     mood === "thinking"
-      ? "rotate(6deg)"
+      ? "rotate(8deg)"
       : mood === "listening"
-        ? "rotate(10deg) scale(1.05)"
+        ? "rotate(12deg) scale(1.06)"
         : mood === "typing"
-          ? `rotate(${(clampedX * 4).toFixed(1)}deg)`
-          : "rotate(4deg)";
+          ? "rotate(2deg) scale(1.02)"
+          : "rotate(2deg)";
 
-  // Espresso-dipped paw coordinates across all 4 states
+  // Espresso-dipped paw coordinates: cheek scratch when thinking, low crouch grip when typing
   const leftPawTransform =
     mood === "listening"
-      ? "translate(17px, 36px) rotate(-32deg)" // Holding left pointed ear forward
+      ? "translate(17px, 36px) rotate(-32deg)"
       : mood === "thinking"
-        ? "translate(31px, 77px) rotate(12deg)" // Relaxed at side
+        ? "translate(32px, 76px) rotate(14deg)"
         : mood === "typing"
-          ? "translate(33px, 68px) rotate(-8deg)" // Resting on sill
-          : "translate(32px, 60px) rotate(-6deg)"; // Clinging over bottom edge
+          ? "translate(32px, 64px) rotate(-12deg)"
+          : "translate(32px, 60px) rotate(-6deg)";
 
   const rightPawTransform =
     mood === "listening"
-      ? "translate(83px, 36px) rotate(32deg)" // Holding right pointed ear forward
+      ? "translate(83px, 36px) rotate(32deg)"
       : mood === "thinking"
-        ? "translate(55px, 64px) rotate(-22deg)" // Cradling chin thoughtfully
+        ? "translate(63px, 57px) rotate(-32deg)" // Scratches side of cheek
         : mood === "typing"
-          ? "translate(67px, 68px) rotate(8deg)" // Resting on sill
-          : "translate(68px, 60px) rotate(6deg)"; // Clinging over bottom edge
+          ? "translate(68px, 64px) rotate(12deg)"
+          : "translate(68px, 60px) rotate(6deg)";
 
   return (
     <svg
@@ -137,17 +137,23 @@ export function CueMascotFox({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
         </g>
       )}
 
-      {/* Bouncing thought-bubble dots top-right while processing */}
+      {/* Sparkling golden idea stars top-right while thinking */}
       {mood === "thinking" && (
-        <g>
-          <circle cx="72" cy="26" r="1.9" fill="#FFEDD5" className="animate-cue-thought-dot" style={{ animationDelay: "0ms" }} />
-          <circle cx="77" cy="20" r="2.5" fill="#FFF7ED" className="animate-cue-thought-dot" style={{ animationDelay: "180ms" }} />
-          <circle cx="81" cy="15" r="3.1" fill="#FFFFFF" className="animate-cue-thought-dot" style={{ animationDelay: "360ms" }} />
+        <g fill="#FDE68A">
+          <path d="M 73 24 L 74 26 L 76 27 L 74 28 L 73 30 L 72 28 L 70 27 L 72 26 Z" className="animate-cue-thought-dot" style={{ animationDelay: "0ms" }} />
+          <path d="M 78 16.5 L 79.3 19.2 L 82 20.5 L 79.3 21.8 L 78 24.5 L 76.7 21.8 L 74 20.5 L 76.7 19.2 Z" className="animate-cue-thought-dot" style={{ animationDelay: "200ms" }} />
         </g>
       )}
 
       <g className="cue-spring-move" style={{ transform: stageTransform, transformOrigin: "50px 55px" }}>
-        <g className={mood === "idle" ? "animate-cue-idle-bob" : mood === "listening" ? "animate-cue-listen-sway" : ""}>
+        <g className={mood === "idle" ? "animate-fox-prowl" : mood === "listening" ? "animate-cue-listen-sway" : ""}>
+          {/* Fluffy Fox Tail peeking & swishing in Thinking */}
+          {mood === "thinking" && (
+            <g className="animate-fox-tail">
+              <path d="M 32 82 Q 12 72 16 56 Q 26 60 32 76 Z" fill="#FB923C" />
+              <path d="M 16 56 Q 21 58 23 62 Q 19 64 15.5 60 Z" fill="#FFF7ED" />
+            </g>
+          )}
           {/* Fox Torso + Scalloped Cream Shopkeeper Chest Bib */}
           <path d="M 30 100 C 30 70 37 62 50 62 C 63 62 70 70 70 100 Z" fill={`url(#${furId})`} />
           <path d="M 39 64 Q 50 67 61 64 L 58 84 L 54 79 L 50 86 L 46 79 L 42 84 Z" fill={`url(#${creamId})`} />
@@ -273,8 +279,8 @@ export function CueMascotFox({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
           )}
           {mood === "thinking" && (
             <g fill="none" stroke="#FB923C" strokeWidth="5.4" strokeLinecap="round">
-              <path d="M 32 71 Q 27 74 31 76.5" />
-              <path d="M 68 71 Q 71 73 56.5 64.5" />
+              <path d="M 32 71 Q 28 74 32 76" />
+              <path d="M 68 71 Q 73 66 63 58" />
             </g>
           )}
 

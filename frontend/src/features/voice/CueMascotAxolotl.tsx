@@ -16,20 +16,21 @@ export function CueMascotAxolotl({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
   const bellyId = `${uid}-belly`;
   const clampedX = Math.max(-1, Math.min(1, lookX));
 
+  // Axolotl Choreography: floaty pond idle, rubbery lean on typing, bouncy jelly & fanning gills when listening
   const stageTransform =
     mood === "idle"
       ? "translate(0px, 34px) scale(0.95)"
       : mood === "typing"
-        ? `translate(${(clampedX * 2.3).toFixed(2)}px, 16px) scale(0.98)`
+        ? `translate(${(clampedX * 4).toFixed(2)}px, 14px) scale(0.95, 1.05)`
         : mood === "listening"
-          ? `translate(0px, 5px) scale(${(1 + audioEnergy * 0.055).toFixed(3)})`
+          ? `translate(0px, 5px) scale(${(1 + audioEnergy * 0.065).toFixed(3)})`
           : "translate(-2px, 8px) scale(0.97)";
 
   const headTransform =
     mood === "typing"
-      ? `translate(${(clampedX * 1.6).toFixed(2)}px, -1px) rotate(${(clampedX * 8).toFixed(2)}deg)`
+      ? `translate(${(clampedX * 2).toFixed(2)}px, -1px) rotate(${(clampedX * 12).toFixed(2)}deg)`
       : mood === "thinking"
-        ? "translate(-1px, 0px) rotate(-9deg)"
+        ? "translate(-1px, 0px) rotate(-13deg)"
         : mood === "listening"
           ? "translate(0px, -1px) rotate(0deg)"
           : "translate(0px, 0px) rotate(0deg)";
@@ -120,6 +121,14 @@ export function CueMascotAxolotl({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
         />
       )}
 
+      {/* Tiny translucent pond bubbles rising even in idle */}
+      {mood === "idle" && (
+        <g fill="none" stroke="rgba(250,245,255,0.65)" strokeWidth="1.1">
+          <circle cx="24" cy="70" r="1.7" className="animate-bloop-bubble" style={{ animationDelay: "0ms" }} />
+          <circle cx="76" cy="68" r="2.1" className="animate-bloop-bubble" style={{ animationDelay: "1100ms" }} />
+        </g>
+      )}
+
       {/* Soft neutral pond-ripple arcs when listening */}
       {mood === "listening" && (
         <g stroke="#FCE7F3" strokeLinecap="round" fill="none">
@@ -138,17 +147,17 @@ export function CueMascotAxolotl({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
         </g>
       )}
 
-      {/* Floating pearl thought bubbles while thinking */}
+      {/* Rising translucent pond bubble stream while thinking */}
       {mood === "thinking" && (
-        <g>
-          <circle cx="72" cy="26" r="1.9" fill="#F3E8FF" className="animate-cue-thought-dot" style={{ animationDelay: "0ms" }} />
-          <circle cx="77" cy="20.5" r="2.5" fill="#FAF5FF" className="animate-cue-thought-dot" style={{ animationDelay: "180ms" }} />
-          <circle cx="81" cy="15.5" r="3.1" fill="#FFFFFF" className="animate-cue-thought-dot" style={{ animationDelay: "360ms" }} />
+        <g fill="none" stroke="#F9A8D4" strokeWidth="1.3">
+          <circle cx="70" cy="29" r="1.8" className="animate-bloop-bubble" style={{ animationDelay: "0ms" }} />
+          <circle cx="76" cy="24" r="2.4" className="animate-bloop-bubble" style={{ animationDelay: "400ms" }} />
+          <circle cx="72" cy="18" r="2.9" className="animate-bloop-bubble" style={{ animationDelay: "800ms" }} />
         </g>
       )}
 
       <g className="cue-spring-move" style={{ transform: stageTransform, transformOrigin: "50px 55px" }}>
-        <g className={mood === "idle" ? "animate-cue-idle-bob" : mood === "listening" ? "animate-cue-listen-sway" : ""}>
+        <g className={mood === "idle" || mood === "thinking" ? "animate-axolotl-float" : mood === "listening" ? "animate-axolotl-jelly" : ""}>
           {/* Cute Curly Dorsal Fin Tail Peak */}
           <path d="M 65 82 Q 82 78 78 68 Q 74 75 67 74 Z" fill={`url(#${gillId})`} opacity="0.85" />
 
@@ -158,18 +167,22 @@ export function CueMascotAxolotl({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
 
           {/* Head + 3-Frill Acoustic Gills */}
           <g className="cue-gaze-move" style={{ transform: headTransform, transformOrigin: "50px 49px" }}>
-            {/* Left 3-Frill Feathery Gill-Ear */}
+            {/* Left 3-Frill Feathery Gill-Ear (flutters rapidly when listening) */}
             <g className="cue-spring-move" style={{ transform: leftGillTransform, transformOrigin: "26px 47px" }}>
-              <path d="M 27 42 Q 16 33 13 36 Q 14 42 25 46 Z" fill={`url(#${gillId})`} />
-              <path d="M 25 47 Q 13 43 11 47 Q 13 52 24 50 Z" fill={`url(#${gillId})`} />
-              <path d="M 26 52 Q 16 53 14 57 Q 18 60 27 55 Z" fill={`url(#${gillId})`} />
+              <g className={mood === "listening" ? "animate-bloop-gill" : ""}>
+                <path d="M 27 42 Q 16 33 13 36 Q 14 42 25 46 Z" fill={`url(#${gillId})`} />
+                <path d="M 25 47 Q 13 43 11 47 Q 13 52 24 50 Z" fill={`url(#${gillId})`} />
+                <path d="M 26 52 Q 16 53 14 57 Q 18 60 27 55 Z" fill={`url(#${gillId})`} />
+              </g>
             </g>
 
-            {/* Right 3-Frill Feathery Gill-Ear */}
+            {/* Right 3-Frill Feathery Gill-Ear (flutters rapidly when listening) */}
             <g className="cue-spring-move" style={{ transform: rightGillTransform, transformOrigin: "74px 47px" }}>
-              <path d="M 73 42 Q 84 33 87 36 Q 86 42 75 46 Z" fill={`url(#${gillId})`} />
-              <path d="M 75 47 Q 87 43 89 47 Q 87 52 76 50 Z" fill={`url(#${gillId})`} />
-              <path d="M 74 52 Q 84 53 86 57 Q 82 60 73 55 Z" fill={`url(#${gillId})`} />
+              <g className={mood === "listening" ? "animate-bloop-gill" : ""} style={{ animationDelay: "150ms" }}>
+                <path d="M 73 42 Q 84 33 87 36 Q 86 42 75 46 Z" fill={`url(#${gillId})`} />
+                <path d="M 75 47 Q 87 43 89 47 Q 87 52 76 50 Z" fill={`url(#${gillId})`} />
+                <path d="M 74 52 Q 84 53 86 57 Q 82 60 73 55 Z" fill={`url(#${gillId})`} />
+              </g>
             </g>
 
             {/* Cute Curly Head Wave Crest */}
