@@ -6,6 +6,7 @@ import uuid
 from app.core.config import get_settings
 from app.core.entitlements import assert_voice_quota
 from app.core.exceptions import InsufficientStockError, PolicyBlockedError
+from app.core.i18n_replies import localize_reply_async, romanize_devanagari_to_hinglish
 from app.core.policy import SecurityPolicyEngine
 from app.core.security import canonical_payload_hash, validate_audio_upload
 from app.core.time_utils import (
@@ -122,20 +123,25 @@ class VoicePipelineService:
         language: str = "hinglish",
     ) -> VoiceTurnResult:
         validate_audio_upload(audio_bytes, content_type)
+        selected_lang = language if language in {"hinglish", "hi", "en"} else "hinglish"
         stt = get_stt_provider()
         stt_res = await stt.transcribe(
             audio_bytes,
             filename=filename,
             content_type=content_type or "audio/webm",
-            language_hint=language,
+            language_hint=selected_lang,
         )
         if stt_res.is_unclear or not stt_res.text:
+            retry_msg = await localize_reply_async(
+                "Awaaz clear nahi thi ya background noise zyada tha. Kripya dobara bolein.",
+                selected_lang,
+            )
             return VoiceTurnResult(
                 operation_id=operation_id,
                 status="retry_audio",
                 transcript="",
-                reply="Awaaz clear nahi thi ya background noise zyada tha. Kripya dobara bolein.",
-                language=language if language in {"hinglish", "hi", "en"} else "hinglish",  # type: ignore[arg-type]
+                reply=retry_msg,
+                language=selected_lang,  # type: ignore[arg-type]
             )
 
         return await self.process_text_turn(
@@ -143,12 +149,54 @@ class VoicePipelineService:
             user_id=user_id,
             text=stt_res.text,
             operation_id=operation_id,
-            language=stt_res.detected_language,
+            language=selected_lang,
             stt_provider=stt_res.provider,
             stt_confidence=stt_res.confidence,
         )
 
     async def process_text_turn(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        text: str,
+        operation_id: str,
+        language: str = "hinglish",
+        stt_provider: str = "text",
+        stt_confidence: float | None = None,
+    ) -> VoiceTurnResult:
+        selected_lang = language if language in {"hinglish", "hi", "en"} else "hinglish"
+        clean_text = text.strip()
+        if selected_lang == "hinglish":
+            clean_text = romanize_devanagari_to_hinglish(clean_text)
+
+        res = await self._process_text_turn_inner(
+            business_id=business_id,
+            user_id=user_id,
+            text=clean_text,
+            operation_id=operation_id,
+            language=selected_lang,
+            stt_provider=stt_provider,
+            stt_confidence=stt_confidence,
+        )
+        res.language = selected_lang  # type: ignore[assignment]
+        if selected_lang in {"en", "hi"} and res.reply:
+            localized = await localize_reply_async(res.reply, selected_lang)
+            if localized and localized != res.reply:
+                res.reply = localized
+                if res.clarification and isinstance(res.clarification, dict) and res.clarification.get("prompt"):
+                    res.clarification["prompt"] = localized
+                try:
+                    self.db.table("conversation_messages").update(
+                        {"content": localized, "language": selected_lang}
+                    ).eq("business_id", business_id).eq("linked_operation_id", operation_id).eq(
+                        "role", "assistant"
+                    ).execute()
+                except Exception:
+                    pass
+        return res
+
+    async def _process_text_turn_inner(
         self,
         *,
         business_id: str,
@@ -277,22 +325,38 @@ class VoicePipelineService:
             customer_hints=customer_hints,
         )
 
-        # Rescue explicit payment-method corrections ("Cash nahi online", "Last transaction cash se nahi online hua tha")
-        # when a recent sale or expense exists in conversation context so LLM uncertainty doesn't drop the update.
-        has_recent_tx = bool(context_state.get("last_sale_id") or context_state.get("last_expense_id"))
-        if has_recent_tx and re.search(
-            r"(?:cash\s+(?:se\s+)?(?:nahi|नहीं)|online\s+(?:se\s+)?(?:nahi|नहीं)|upi\s+(?:se\s+)?(?:nahi|नहीं)|last\s+transaction)",
-            clean_text,
-            re.IGNORECASE,
-        ):
+        # Rescue explicit corrections (payment method, sale/damage/expiry/receive quantity)
+        # when recent context exists so LLM uncertainty or misrouting doesn't drop/corrupt the update.
+        has_recent_op = bool(
+            context_state.get("last_operation_kind")
+            or context_state.get("last_sale_id")
+            or context_state.get("last_expense_id")
+            or context_state.get("last_damage_operation_id")
+        )
+        looks_like_correction = bool(
+            re.search(
+                r"(?:cash\s+(?:se\s+)?(?:nahi|नहीं)|online\s+(?:se\s+)?(?:nahi|नहीं)|upi\s+(?:se\s+)?(?:nahi|नहीं)"
+                r"|last\s+transaction|\b(?:sorry|actually|galti\s+se|ki\s+jagah|instead\s+of)\b"
+                r"|(?:\b\d+|\bek\b|\bdo\b|\bteen\b|\bchaar\b|\bpaanch\b)\s+(?:\w+\s+){0,2}(?:nahi|nahin|नहीं)\b"
+                r"|\bnot\s+(?:\d+|one|two|three)\b|\bbas\s+(?:\d+|ek|do|teen)\s+hi\b)",
+                clean_text,
+                re.IGNORECASE,
+            )
+        )
+        if has_recent_op and looks_like_correction:
             top_intent = proposal.operations[0].intent if proposal.operations else "unknown"
+            has_expense_words = bool(
+                re.search(r"\b(expense|kharcha|kharch|bill|bijli|electricity|rent|kiraya|tea|chai|rupaye|rs)\b|₹", clean_text, re.IGNORECASE)
+            )
             if (
                 proposal.confidence < 0.85
                 or proposal.has_ambiguity_or_noise_conflict
-                or top_intent in {"unknown", "clarify_response", "record_sale", "record_expense"}
+                or top_intent in {"unknown", "clarify_response"}
+                or (top_intent == "record_expense" and not has_expense_words)
             ):
                 normalized_correction = (
-                    clean_text.replace("से नहीं", "se nahi")
+                    romanize_devanagari_to_hinglish(clean_text)
+                    .replace("से नहीं", "se nahi")
                     .replace("नहीं", "nahi")
                     .replace("कैश", "cash")
                     .replace("ऑनलाइन", "online")
@@ -408,7 +472,7 @@ class VoicePipelineService:
         # or a payment-method correction ("Last transaction cash se nahi online hua tha"),
         # clear pending_flow and let the main pipeline execute the new command cleanly.
         new_cmd_pattern = re.compile(
-            r"(?:\b(?:sold|bik|biki|bika|bech|bechi|aayi|aaya|receive|add|expense|kharcha|udhaar|khata|paid|payment|damaged|expired|inventory|stock|cancel|chhodo|hatao)\b|(?:cash|online|upi)\s+(?:se\s+)?(?:nahi|नहीं)|last\s+transaction)",
+            r"(?:\b(?:sold|bik|biki|bika|bech|bechi|aayi|aaya|receive|add|expense|kharcha|udhaar|khata|paid|payment|damage|damaged|demis|expire|expired|inventory|stock|cancel|chhodo|hatao)\b|(?:cash|online|upi)\s+(?:se\s+)?(?:nahi|नहीं)|last\s+transaction)",
             re.IGNORECASE,
         )
         is_short_confirm = any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "ok", "same", "free"))
@@ -822,6 +886,8 @@ class VoicePipelineService:
             context_state["last_product_id"] = str(product["id"])
             context_state["last_product_name"] = product["name"]
             context_state["last_receive_qty"] = qty
+            context_state["last_receive_cost"] = unit_cost
+            context_state["last_operation_kind"] = "inventory_receive"
             context_state["last_operation_id"] = operation_id
 
             total = qty * unit_cost
@@ -919,6 +985,15 @@ class VoicePipelineService:
                 operation_id=operation_id,
                 notes=draft.get("notes") or f"Voice {mtype} deduction",
             )
+            context_state["last_product_id"] = str(product["id"])
+            context_state["last_product_name"] = product["name"]
+            context_state["last_operation_kind"] = intent
+            context_state["last_operation_id"] = operation_id
+            context_state["last_damage_product_id"] = str(product["id"])
+            context_state["last_damage_product_name"] = product["name"]
+            context_state["last_damage_qty"] = qty
+            context_state["last_damage_type"] = mtype
+            context_state["last_damage_operation_id"] = operation_id
             reply = f"{qty:g} {product['name']} {mtype} mark ho gaya. Remaining stock: {rpc['after_qty']:g}."
             slip = {
                 "id": f"slip-{operation_id}",
@@ -986,6 +1061,67 @@ class VoicePipelineService:
             return slip, reply
 
         raise PolicyBlockedError("Unsupported draft payload")
+
+    def _apply_damage_correction(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        new_qty: float,
+        operation_id: str,
+        txn_date: str,
+        old_operation_id: str | None,
+        product_id: str | None,
+        movement_type: str | None,
+        context_state: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        corr = self.tx.correct_damage_or_expiry(
+            business_id=business_id,
+            user_id=user_id,
+            new_quantity=float(new_qty),
+            operation_id=operation_id,
+            transaction_date=txn_date,
+            old_operation_id=old_operation_id,
+            product_id=product_id,
+            movement_type=movement_type,
+        )
+        mtype = corr["movement_type"]
+        context_state["last_product_id"] = corr["product_id"]
+        context_state["last_product_name"] = corr["product_name"]
+        context_state["last_operation_kind"] = f"inventory_{mtype}"
+        context_state["last_operation_id"] = corr["new_operation_id"]
+        context_state["last_damage_product_id"] = corr["product_id"]
+        context_state["last_damage_product_name"] = corr["product_name"]
+        context_state["last_damage_qty"] = corr["new_quantity"]
+        context_state["last_damage_type"] = mtype
+        context_state["last_damage_operation_id"] = corr["new_operation_id"]
+        reply = (
+            f"{corr['product_name']} ka {mtype} update ho gaya: "
+            f"{corr['old_quantity']:g} se {corr['new_quantity']:g}. Remaining stock: {corr['after_stock']:g}."
+        )
+        slip = {
+            "id": f"slip-{corr['new_operation_id']}",
+            "operationId": corr["new_operation_id"],
+            "kind": "correction",
+            "title": f"Corrected {mtype.title()} · {corr['product_name']}",
+            "subtitle": "Previous entry reversed & updated (Audit Trail)",
+            "transactionDate": txn_date,
+            "lines": [
+                {
+                    "label": mtype.title(),
+                    "value": f"{corr['old_quantity']:g} → {corr['new_quantity']:g} {corr['unit']}",
+                    "tone": "crimson" if corr["new_quantity"] > corr["old_quantity"] else "sage",
+                },
+                {
+                    "label": "Stock Level",
+                    "value": f"{corr['before_stock']:g} → {corr['after_stock']:g}",
+                    "tone": "neutral",
+                },
+            ],
+            "status": "corrected",
+            "reversible": True,
+        }
+        return slip, reply
 
     async def _execute_operations_batch(
         self,
@@ -1098,6 +1234,10 @@ class VoicePipelineService:
                     transaction_date=today_str,
                 )
                 context_state.pop("last_operation_id", None)
+                context_state.pop("last_operation_kind", None)
+                if str(context_state.get("last_damage_operation_id") or "") == str(target_op):
+                    context_state.pop("last_damage_operation_id", None)
+                    context_state.pop("last_damage_qty", None)
                 replies.append(f"Pichla operation reverse ho gaya ({rev['summary']}).")
                 receipts.append(
                     {
@@ -1117,10 +1257,182 @@ class VoicePipelineService:
                 last_kind = context_state.get("last_operation_kind")
                 exp_id = context_state.get("last_expense_id")
                 sale_id = context_state.get("last_sale_id")
+                dmg_op_id = context_state.get("last_damage_operation_id")
+                dmg_pid = context_state.get("last_damage_product_id")
 
-                # Expense correction (e.g., "cash nahi, UPI se kiya tha" or "1000 nahi 500 tha")
-                if last_kind == "record_expense" and exp_id and (
-                    op.payment_method is not None or op.total_amount is not None or op.description is not None
+                loss_cue = bool(
+                    re.search(r"\b(damage|damaged|demis|kharab|toot|expire|expired)\b", raw_transcript, re.IGNORECASE)
+                )
+                receive_cue = bool(
+                    re.search(r"\b(aayi|aaya|aaye|receive|received|stock\s+add)\b", raw_transcript, re.IGNORECASE)
+                ) and not loss_cue
+                expense_cue = bool(
+                    re.search(r"\b(expense|kharcha|kharch|bill|bijli|electricity|rent|kiraya|tea|chai)\b", raw_transcript, re.IGNORECASE)
+                )
+                sale_cue = bool(
+                    re.search(r"\b(sale|biki|bika|bike|sold|becha|bechi)\b", raw_transcript, re.IGNORECASE)
+                )
+
+                # Ignore size/weight numbers like "250 gram" / "70g" accidentally parsed as quantity
+                raw_op_qty = op.quantity
+                if raw_op_qty is not None and raw_op_qty == int(raw_op_qty):
+                    if re.search(
+                        rf"\b{int(raw_op_qty)}\s*(?:g|gm|gms|grams?|ml|mls|ltr|litres?|liters?)\b",
+                        raw_transcript,
+                        re.IGNORECASE,
+                    ):
+                        raw_op_qty = None
+                new_qty = raw_op_qty if raw_op_qty is not None else extract_post_negation_quantity(raw_transcript)
+
+                resolved_corr_pid: str | None = None
+                if op.product_query:
+                    pres_corr = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
+                    if pres_corr.status in {"exact", "verify_alias"} and pres_corr.product:
+                        resolved_corr_pid = str(pres_corr.product["id"])
+
+                # 1. Damage / Expiry Correction
+                if not expense_cue and not sale_cue and (
+                    last_kind in {"inventory_damage", "inventory_expiry"}
+                    or (loss_cue and (dmg_op_id or dmg_pid or resolved_corr_pid))
+                ):
+                    if new_qty is None:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply="Kitne items damaged ya expired mark karne hain?",
+                            language=language,  # type: ignore[arg-type]
+                        )
+                    target_pid = resolved_corr_pid or (str(dmg_pid) if dmg_pid else None)
+                    target_prod_row = next((p for p in products if str(p["id"]) == str(target_pid)), None) if target_pid else None
+                    final_loss_qty = float(new_qty)
+                    if target_prod_row and final_loss_qty > 0:
+                        conv_q, u_err = convert_to_base_quantity(
+                            quantity=final_loss_qty,
+                            spoken_unit=op.unit,
+                            base_unit=target_prod_row["base_unit"],
+                        )
+                        if u_err or conv_q is None:
+                            return VoiceTurnResult(
+                                operation_id=operation_id,
+                                status="needs_clarification",
+                                transcript=raw_transcript,
+                                reply=u_err or "Unit clear nahi hai.",
+                                language=language,  # type: ignore[arg-type]
+                            )
+                        final_loss_qty = conv_q
+                    target_mtype = (
+                        "expiry"
+                        if ("expire" in raw_transcript.lower() or last_kind == "inventory_expiry")
+                        else ("damage" if (loss_cue or last_kind == "inventory_damage") else None)
+                    )
+                    try:
+                        slip, rep = self._apply_damage_correction(
+                            business_id=business_id,
+                            user_id=user_id,
+                            new_qty=final_loss_qty,
+                            operation_id=sub_op_id,
+                            txn_date=today_str,
+                            old_operation_id=str(dmg_op_id) if (dmg_op_id and (not target_pid or str(target_pid) == str(dmg_pid))) else None,
+                            product_id=target_pid,
+                            movement_type=target_mtype,
+                            context_state=context_state,
+                        )
+                    except (InsufficientStockError, PolicyBlockedError) as exc:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=exc.message,
+                            language=language,  # type: ignore[arg-type]
+                        )
+                    for p_row in products:
+                        if str(p_row["id"]) == str(context_state.get("last_damage_product_id")):
+                            # Keep in-memory stock synced for subsequent batch items
+                            after_val = next(
+                                (ln["value"].split("→")[-1].strip() for ln in slip["lines"] if ln["label"] == "Stock Level"),
+                                None,
+                            )
+                            if after_val is not None:
+                                try:
+                                    p_row["current_stock"] = float(after_val)
+                                except ValueError:
+                                    pass
+                            break
+                    replies.append(rep)
+                    receipts.append(slip)
+                    continue
+
+                # 2. Stock Receive Correction
+                if not expense_cue and not sale_cue and not loss_cue and (
+                    last_kind == "inventory_receive" or receive_cue
+                ):
+                    target_pid = resolved_corr_pid or (
+                        str(context_state.get("last_product_id")) if context_state.get("last_product_id") else None
+                    )
+                    new_cost = op.cost_price if op.cost_price is not None else op.unit_price
+                    if new_qty is None and new_cost is None:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply="Stock receive mein sahi quantity ya rate batayein.",
+                            language=language,  # type: ignore[arg-type]
+                        )
+                    try:
+                        corr_rec = self.tx.correct_stock_receive(
+                            business_id=business_id,
+                            user_id=user_id,
+                            operation_id=sub_op_id,
+                            transaction_date=today_str,
+                            old_operation_id=str(context_state.get("last_operation_id")) if last_kind == "inventory_receive" else None,
+                            product_id=target_pid,
+                            new_quantity=float(new_qty) if new_qty is not None else None,
+                            new_unit_cost=float(new_cost) if new_cost is not None else None,
+                        )
+                    except (InsufficientStockError, PolicyBlockedError) as exc:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=exc.message,
+                            language=language,  # type: ignore[arg-type]
+                        )
+                    context_state["last_product_id"] = corr_rec["product_id"]
+                    context_state["last_product_name"] = corr_rec["product_name"]
+                    context_state["last_receive_qty"] = corr_rec["new_quantity"]
+                    context_state["last_receive_cost"] = corr_rec["new_cost"]
+                    context_state["last_operation_kind"] = "inventory_receive"
+                    context_state["last_operation_id"] = corr_rec["new_operation_id"]
+                    replies.append(
+                        f"{corr_rec['product_name']} ka stock receive update ho gaya: "
+                        f"{corr_rec['old_quantity']:g} se {corr_rec['new_quantity']:g} (Rate ₹{corr_rec['new_cost']:,.0f}). "
+                        f"Remaining stock: {corr_rec['after_stock']:g}."
+                    )
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "correction",
+                            "title": f"Corrected Stock Receive · {corr_rec['product_name']}",
+                            "subtitle": "Previous receipt reversed & updated (Audit Trail)",
+                            "transactionDate": today_str,
+                            "amountINR": corr_rec["new_quantity"] * corr_rec["new_cost"],
+                            "lines": [
+                                {"label": "Received", "value": f"{corr_rec['old_quantity']:g} → {corr_rec['new_quantity']:g} {corr_rec['unit']}", "tone": "sage"},
+                                {"label": "Stock Level", "value": f"{corr_rec['before_stock']:g} → {corr_rec['after_stock']:g}", "tone": "neutral"},
+                            ],
+                            "status": "corrected",
+                            "reversible": True,
+                        }
+                    )
+                    continue
+
+                # 3. Expense correction (e.g., "cash nahi, UPI se kiya tha" or "1000 nahi 500 tha")
+                if exp_id and not loss_cue and not sale_cue and (last_kind == "record_expense" or expense_cue) and (
+                    op.payment_method is not None
+                    or op.total_amount is not None
+                    or (op.description is not None and expense_cue)
                 ):
                     corr_exp = self.tx.correct_last_expense(
                         business_id=business_id,
@@ -1130,9 +1442,11 @@ class VoicePipelineService:
                         transaction_date=today_str,
                         new_amount=op.total_amount,
                         new_payment_method=op.payment_method,
-                        new_description=op.description,
+                        new_description=op.description if expense_cue else None,
                     )
                     context_state["last_expense_id"] = str(corr_exp["new_expense_id"])
+                    context_state["last_operation_kind"] = "record_expense"
+                    context_state["last_operation_id"] = sub_op_id
                     old_m = "Online" if corr_exp["old_method"] == "upi" else corr_exp["old_method"].title()
                     new_m = "Online" if corr_exp["new_method"] == "upi" else corr_exp["new_method"].title()
                     replies.append(
@@ -1156,7 +1470,10 @@ class VoicePipelineService:
                     )
                     continue
 
-                if sale_id and (
+                # 4. Sale payment method/status correction
+                if sale_id and not loss_cue and not expense_cue and (
+                    last_kind == "record_sale" or sale_cue or last_kind is None
+                ) and (
                     op.payment_method is not None
                     or op.payment_status is not None
                     or (
@@ -1193,6 +1510,8 @@ class VoicePipelineService:
                             language=language,  # type: ignore[arg-type]
                         )
                     context_state["last_sale_id"] = str(corr_pay["new_sale_id"])
+                    context_state["last_operation_kind"] = "record_sale"
+                    context_state["last_operation_id"] = sub_op_id
                     replies.append(
                         f"Sale payment update ho gaya: ₹{corr_pay['total_amount']:,.0f} ({corr_pay['old_method']} → {corr_pay['new_method']})."
                     )
@@ -1214,17 +1533,10 @@ class VoicePipelineService:
                     )
                     continue
 
-                # Ignore size/weight numbers like "250 gram" / "70g" accidentally parsed as sale quantity
-                raw_op_qty = op.quantity
-                if raw_op_qty is not None and raw_op_qty == int(raw_op_qty):
-                    if re.search(
-                        rf"\b{int(raw_op_qty)}\s*(?:g|gm|gms|grams?|ml|mls|ltr|litres?|liters?)\b",
-                        raw_transcript,
-                        re.IGNORECASE,
-                    ):
-                        raw_op_qty = None
-                new_qty = raw_op_qty if raw_op_qty is not None else extract_post_negation_quantity(raw_transcript)
-                if sale_id and new_qty is not None:
+                # 5. Sale quantity correction
+                if sale_id and new_qty is not None and not loss_cue and not expense_cue and (
+                    last_kind == "record_sale" or sale_cue or last_kind is None
+                ):
                     try:
                         corr = self.tx.correct_sale_quantity(
                             business_id=business_id,
@@ -1251,6 +1563,8 @@ class VoicePipelineService:
                             reply=msg,
                             language=language,  # type: ignore[arg-type]
                         )
+                    context_state["last_operation_kind"] = "record_sale"
+                    context_state["last_operation_id"] = sub_op_id
                     replies.append(
                         f"Sale correct ho gayi: {corr['old_quantity']:g} se {corr['new_quantity']:g} (₹{corr['new_total']:,.0f}). Audit trail updated."
                     )
@@ -1647,6 +1961,63 @@ class VoicePipelineService:
                         "transaction_date": txn_date_str,
                         "notes": op.notes,
                     }
+                    # If user explicitly negates/corrects a previously logged damage/expiry count on this item
+                    # (e.g. "jo 14 Nescafe gold jars aaye the, unme se 2 damaged the, ek nahi"), update instead of double-deducting.
+                    if op.intent in {"inventory_damage", "inventory_expiry"} and re.search(
+                        r"(?:\b(?:ek|do|teen|chaar|paanch|\d+)\s+(?:hi\s+)?(?:nahi|nahin|नहीं)\b|\bnot\s+(?:\d+|one|two|three)\b|\b(?:sorry|actually|galti\s+se)\b)",
+                        raw_transcript,
+                        re.IGNORECASE,
+                    ):
+                        mtype_corr = "expiry" if op.intent == "inventory_expiry" else "damage"
+                        prior_op_id = (
+                            str(context_state.get("last_damage_operation_id"))
+                            if str(context_state.get("last_damage_product_id") or "") == str(target_prod["id"])
+                            and context_state.get("last_damage_operation_id")
+                            else None
+                        )
+                        prior_mv = None
+                        if not prior_op_id:
+                            prior_mv = self.tx.find_latest_active_loss_movement(
+                                business_id=business_id,
+                                product_id=str(target_prod["id"]),
+                                movement_type=mtype_corr,
+                                transaction_date=txn_date_str,
+                            )
+                        if prior_op_id or prior_mv:
+                            corr_raw = extract_post_negation_quantity(raw_transcript)
+                            corr_qty = conv_qty
+                            if corr_raw is not None and op.quantity is not None and abs(float(corr_raw) - float(op.quantity)) > 1e-6:
+                                cq, u_err = convert_to_base_quantity(
+                                    quantity=float(corr_raw),
+                                    spoken_unit=op.unit,
+                                    base_unit=target_prod["base_unit"],
+                                )
+                                if not u_err and cq is not None:
+                                    corr_qty = cq
+                            slip, rep = self._apply_damage_correction(
+                                business_id=business_id,
+                                user_id=user_id,
+                                new_qty=float(corr_qty),
+                                operation_id=sub_op_id,
+                                txn_date=txn_date_str,
+                                old_operation_id=prior_op_id or (str(prior_mv["operation_id"]) if prior_mv else None),
+                                product_id=str(target_prod["id"]),
+                                movement_type=mtype_corr,
+                                context_state=context_state,
+                            )
+                            after_val = next(
+                                (ln["value"].split("→")[-1].strip() for ln in slip["lines"] if ln["label"] == "Stock Level"),
+                                None,
+                            )
+                            if after_val is not None:
+                                try:
+                                    target_prod["current_stock"] = float(after_val)
+                                except ValueError:
+                                    pass
+                            receipts.append(slip)
+                            replies.append(rep)
+                            continue
+
                     slip, rep = self._commit_draft_now(
                         draft=draft,
                         business_id=business_id,
@@ -1776,6 +2147,10 @@ class VoicePipelineService:
                             operation_id=sub_op_id,
                             notes=op.description or "Voice Khata entry",
                         )
+                        context_state["last_operation_kind"] = "record_udhaar_credit"
+                        context_state["last_operation_id"] = sub_op_id
+                        context_state["last_customer_id"] = str(cust["id"])
+                        context_state["last_customer_name"] = cust["name"]
                         rep = f"{cust['name']} ke khate mein ₹{amt:,.0f} udhaar likh diya gaya (Balance ₹{ud['after_balance']:,.0f})."
                         replies.append(rep)
                         receipts.append(
@@ -1810,6 +2185,10 @@ class VoicePipelineService:
                             transaction_date=txn_date_str,
                             operation_id=sub_op_id,
                         )
+                        context_state["last_operation_kind"] = "record_customer_payment"
+                        context_state["last_operation_id"] = sub_op_id
+                        context_state["last_customer_id"] = str(cust["id"])
+                        context_state["last_customer_name"] = cust["name"]
                         method_label = "Online" if (op.payment_method or "cash") == "upi" else (op.payment_method or "cash").title()
                         rep = (
                             f"{cust['name']} se ₹{amt:,.0f} ({method_label}) receive ho gaya aur Sales ledger mein include ho gaya. "

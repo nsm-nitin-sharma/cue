@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   clearOfflineQueue,
   enqueueOfflineCommand,
@@ -343,6 +344,7 @@ function extractRupeeHint(text: string): number | null {
 }
 
 export function CueWorkspaceProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const todayYmd = useMemo(() => getTodayIST(), []);
   const yesterdayYmd = useMemo(() => shiftDate(todayYmd, -1), [todayYmd]);
   const dayMinus3Ymd = useMemo(() => shiftDate(todayYmd, -3), [todayYmd]);
@@ -482,6 +484,8 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
             quantityDelta: Number(m.quantity_delta ?? 0),
             unit: (m.unit as BaseUnit) ?? "piece",
             unitCost: m.unit_cost !== null && m.unit_cost !== undefined ? Number(m.unit_cost) : undefined,
+            referenceType: m.reference_type ? String(m.reference_type) : undefined,
+            referenceId: m.reference_id ? String(m.reference_id) : undefined,
             transactionDate: String(m.transaction_date),
             notes: String(m.notes ?? ""),
             operationId: String(m.operation_id),
@@ -2605,6 +2609,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     setMovements([]);
     setSales([]);
     setExpenses([]);
+    setCustomerPayments([]);
     setConversations([
       {
         date: todayYmd,
@@ -2613,7 +2618,8 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         entries: [],
       },
     ]);
-  }, [todayYmd]);
+    router.replace("/login");
+  }, [router, todayYmd]);
 
   const deleteAccount = useCallback(async () => {
     await deleteAccountRemote();

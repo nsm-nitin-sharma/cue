@@ -484,3 +484,290 @@ async def test_exact_product_sale_executes_without_hitting_not_found():
     )
     assert res.status == "executed"
     assert "nahi mila" not in res.reply.lower()
+
+
+def test_item_specific_sales_query_and_quantity_correction_revenue():
+    from app.services.transaction_engine import TransactionEngine
+
+    # 1. Fallback parser extracts product_query on item-specific sales queries
+    q_prop = deterministic_fallback_parse("aaj Maggie ki kitne sales hui", "hinglish")
+    assert q_prop.operations[0].intent == "query_business"
+    assert q_prop.operations[0].query_topic == "sales_summary"
+    assert q_prop.operations[0].product_query == "maggie"
+
+    # 2. QueryEngine computes item-specific sales across matching variants
+    class _FakeResp:
+        def __init__(self, data):
+            self.data = data
+
+    class _FakeTable:
+        def __init__(self, rows):
+            self._rows = rows
+            self._action = "select"
+            self._payload = None
+            self._filters = []
+
+        def select(self, *_a, **_k):
+            return self
+
+        def update(self, payload):
+            self._action = "update"
+            self._payload = payload
+            return self
+
+        def eq(self, k, v):
+            self._filters.append((k, v))
+            return self
+
+        def execute(self):
+            matched = [r for r in self._rows if all(r.get(k) == v for k, v in self._filters)]
+            if self._action == "update":
+                for r in matched:
+                    r.update(self._payload)
+            return _FakeResp(matched)
+
+    class _FakeRPC:
+        def __init__(self, rows, new_qty):
+            self._rows = rows
+            self._new_qty = new_qty
+
+        def execute(self):
+            s = self._rows[0]
+            s["total_amount"] = self._new_qty * 50.0
+            s["paid_amount"] = self._new_qty * 50.0
+            s["status"] = "corrected"  # simulates SQL RPC setting corrected
+            s["sale_items"][0]["quantity"] = self._new_qty
+            s["sale_items"][0]["line_total"] = self._new_qty * 50.0
+            return _FakeResp({"old_quantity": 10.0, "new_quantity": self._new_qty, "new_total": self._new_qty * 50.0})
+
+    class _FakeDB:
+        def __init__(self, sales_rows):
+            self.sales_rows = sales_rows
+
+        def table(self, name):
+            return _FakeTable(self.sales_rows if name == "sales" else [])
+
+        def rpc(self, _fn, params):
+            return _FakeRPC(self.sales_rows, float(params["p_new_quantity"]))
+
+    today_str = date.today().isoformat()
+    # Note: QueryEngine uses get_business_today("Asia/Kolkata"); match it dynamically
+    from app.core.time_utils import get_business_today
+
+    today_ist = get_business_today("Asia/Kolkata").isoformat()
+    sales_rows = [
+        {
+            "id": "s-coke",
+            "business_id": "b1",
+            "transaction_date": today_ist,
+            "status": "active",
+            "total_amount": 500.0,
+            "paid_amount": 500.0,
+            "sale_items": [{"product_id": "p-coke", "quantity": 10.0, "unit": "piece", "line_total": 500.0}],
+        }
+    ]
+    prods = [
+        {"id": "p-coke", "name": "Coca-Cola 750 Ml", "base_unit": "piece"},
+        {"id": "p-mag", "name": "Maggie Masala 70 Gram", "base_unit": "packet"},
+    ]
+    db = _FakeDB(sales_rows)
+    tx = TransactionEngine(db)
+    tx.correct_sale_quantity(
+        business_id="b1",
+        user_id="u1",
+        sale_id="s-coke",
+        new_quantity=7.0,
+        operation_id="op-corr-7",
+        transaction_date=today_ist,
+    )
+    # Must stay active so updated ₹350 revenue is counted!
+    assert sales_rows[0]["status"] == "active"
+    qe = QueryEngine(db)
+    coke_res = qe.answer_query(business_id="b1", topic="sales_summary", product_query="Coke", products=prods, aliases=[])
+    assert coke_res["amount_inr"] == 350.0
+    assert "7 units" in coke_res["reply"] or "7 piece" in coke_res["lines"][0]["value"]
+
+
+def test_hinglish_romanizer_and_english_reply_localization():
+    from app.core.i18n_replies import localize_reply_sync, romanize_devanagari_to_hinglish
+
+    # Devanagari Hinglish STT output converts cleanly into Romanized Hinglish for Hinglish mode
+    rom = romanize_devanagari_to_hinglish("आज चीनी की कितनी सी एल हुई?")
+    assert "aaj" in rom.lower()
+    assert "chini" in rom.lower()
+    assert "sale" in rom.lower()
+
+    mag = romanize_devanagari_to_hinglish("एक मैगी मसाला 70 gram bik gayi")
+    assert "maggie" in mag.lower()
+    assert "70 gram" in mag.lower()
+
+    # English localization converts canonical replies cleanly without changing numbers/names
+    en_sales = localize_reply_sync(
+        "Aaj abhi tak 10 sales hui hain, total ₹1,136 (Collected ₹1,136, Udhaar ₹0).",
+        "en",
+    )
+    assert en_sales == "Today's total so far: 10 sales amounting to ₹1,136 (Collected ₹1,136, Udhaar ₹0)."
+
+    en_item = localize_reply_sync("1 Maggie Masala 70 Gram ki Online sale (₹12) save ho gayi.", "en")
+    assert en_item == "Saved Online sale for 1 Maggie Masala 70 Gram (₹12)."
+
+
+def test_damage_correction_parsing_and_ledger_isolation():
+    from app.core.i18n_replies import localize_reply_sync, romanize_devanagari_to_hinglish
+    from app.services.transaction_engine import TransactionEngine
+
+    # Devanagari damage terms ("डेमिस") + Hindi negation romanize cleanly
+    rom = romanize_devanagari_to_hinglish("दो नहीं, बस एक ही डेमिस था.")
+    assert "do nahi" in rom.lower()
+    assert "ek" in rom.lower()
+    assert "damaged" in rom.lower()
+
+    # Post-negation extraction handles both trailing negation and lot context
+    assert extract_post_negation_quantity("jo 14 Nescafe gold jars aaye the, unme se 2 damaged the, ek nahi.") == 2.0
+    assert extract_post_negation_quantity("do nahi, bas ek hi demis tha.") == 1.0
+    assert extract_post_negation_quantity("Sorry, 2 damage thay.") == 2.0
+
+    # Fallback parser classifies damage corrections WITHOUT setting expense total_amount
+    p1 = deterministic_fallback_parse("Sorry, 2 damage thay.", "hinglish")
+    assert p1.operations[0].intent == "correct_last_operation"
+    assert p1.operations[0].quantity == 2.0
+    assert p1.operations[0].total_amount is None
+
+    p2 = deterministic_fallback_parse("do nahi, bas ek hi demis tha.", "hinglish")
+    assert p2.operations[0].intent == "correct_last_operation"
+    assert p2.operations[0].quantity == 1.0
+    assert p2.operations[0].total_amount is None
+
+    # Legitimate credit wording with "paise nahi diye" must NOT falsely trigger correct_last_operation
+    p_non_corr = deterministic_fallback_parse("10 coke udhaar di, paise nahi diye", "hinglish")
+    assert p_non_corr.operations[0].intent != "correct_last_operation"
+
+    # End-to-end TransactionEngine damage correction (1 -> 2 -> 1) without touching expenses
+    class _Resp:
+        def __init__(self, data):
+            self.data = data
+
+    class _Tbl:
+        def __init__(self, store, name):
+            self.store = store
+            self.name = name
+            self._act = "select"
+            self._payload = None
+            self._filters = []
+
+        def select(self, *_a, **_k):
+            self._act = "select"
+            return self
+
+        def update(self, payload):
+            self._act = "update"
+            self._payload = payload
+            return self
+
+        def insert(self, payload):
+            self._act = "insert"
+            self._payload = payload
+            return self
+
+        def eq(self, k, v):
+            self._filters.append(("eq", k, v))
+            return self
+
+        def in_(self, k, vals):
+            self._filters.append(("in", k, set(vals)))
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            rows = self.store[self.name]
+            if self._act == "insert":
+                row = {"id": f"m-{len(rows) + 1}", "created_at": f"2026-11-27T10:0{len(rows)}:00Z", **self._payload}
+                rows.append(row)
+                return _Resp([row])
+            matched = []
+            for r in rows:
+                ok = True
+                for kind, k, v in self._filters:
+                    if kind == "eq" and r.get(k) != v:
+                        ok = False
+                    elif kind == "in" and r.get(k) not in v:
+                        ok = False
+                if ok:
+                    matched.append(r)
+            if self._act == "update":
+                for r in matched:
+                    r.update(self._payload)
+            return _Resp(list(reversed(matched)))
+
+    class _DB:
+        def __init__(self, store):
+            self.store = store
+
+        def table(self, name):
+            return _Tbl(self.store, name)
+
+    store = {
+        "products": [{"id": "p-nes", "business_id": "b1", "name": "Nescafe Gold Jars", "base_unit": "piece"}],
+        "inventory": [{"business_id": "b1", "product_id": "p-nes", "current_quantity": 13.0}],
+        "inventory_movements": [
+            {
+                "id": "m-dmg-1",
+                "business_id": "b1",
+                "product_id": "p-nes",
+                "movement_type": "damage",
+                "quantity_delta": -1.0,
+                "unit": "piece",
+                "operation_id": "op-dmg-1",
+                "transaction_date": "2026-11-27",
+                "created_at": "2026-11-27T10:00:00Z",
+            }
+        ],
+        "expenses": [{"id": "exp-1", "business_id": "b1", "category": "Electricity", "amount": 1000.0, "status": "active"}],
+        "voice_transactions": [{"business_id": "b1", "operation_id": "op-dmg-1", "validation_status": "executed"}],
+    }
+    tx = TransactionEngine(_DB(store))
+
+    # Correct 1 -> 2 (stock: 13 -> 12)
+    c1 = tx.correct_damage_or_expiry(
+        business_id="b1",
+        user_id="u1",
+        new_quantity=2.0,
+        operation_id="op-dmg-2",
+        transaction_date="2026-11-27",
+        old_operation_id="op-dmg-1",
+        product_id="p-nes",
+        movement_type="damage",
+    )
+    assert c1["old_quantity"] == 1.0 and c1["new_quantity"] == 2.0 and c1["after_stock"] == 12.0
+    assert store["inventory"][0]["current_quantity"] == 12.0
+    assert store["expenses"][0]["status"] == "active"  # Expenses completely untouched!
+
+    # Correct 2 -> 1 (stock: 12 -> 13)
+    c2 = tx.correct_damage_or_expiry(
+        business_id="b1",
+        user_id="u1",
+        new_quantity=1.0,
+        operation_id="op-dmg-3",
+        transaction_date="2026-11-27",
+        old_operation_id="op-dmg-2",
+        product_id="p-nes",
+        movement_type="damage",
+    )
+    assert c2["old_quantity"] == 2.0 and c2["new_quantity"] == 1.0 and c2["after_stock"] == 13.0
+    assert store["inventory"][0]["current_quantity"] == 13.0
+
+    # Active non-reversed loss movement is ONLY the final -1 entry
+    active = tx.find_latest_active_loss_movement(business_id="b1", product_id="p-nes", movement_type="damage")
+    assert active is not None and abs(active["quantity_delta"]) == 1.0 and active["operation_id"] == "op-dmg-3"
+
+    # English reply rule for damage correction
+    en_corr = localize_reply_sync(
+        "Nescafe Gold Jars ka damage update ho gaya: 2 se 1. Remaining stock: 13.",
+        "en",
+    )
+    assert en_corr == "Updated damage for Nescafe Gold Jars from 2 to 1. Remaining stock: 13."

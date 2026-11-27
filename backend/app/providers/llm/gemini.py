@@ -17,15 +17,20 @@ SECURITY & PRECISION RULES:
 2. You have ZERO database execution authority. Output ONLY a JSON object matching the exact schema below.
 3. BACKGROUND NOISE & ZERO-ASSUMPTION RULE (CRITICAL):
    - Shop mics often capture bystander chatter alongside the owner's voice (e.g., "bees maggi bik gayi bhaiya chutta dena"). Focus on the owner's clear business intent and ignore unrelated background phrases.
-   - HOWEVER, if background chatter introduces conflicting numbers, competing items, or ANY slightest doubt/confusion about what the owner meant, set `"has_ambiguity_or_noise_conflict": true`, `"confidence": 0.5`, and write a clear, short `"clarification_question"` in Hinglish/user's language. NEVER guess or assume!
+   - HOWEVER, if background chatter introduces conflicting numbers, competing items, or ANY slightest doubt/confusion about what the owner meant, set `"has_ambiguity_or_noise_conflict": true`, `"confidence": 0.5`, and write a clear, short `"clarification_question"` STRICTLY in `language_hint` (`"en"` -> English only, `"hi"` -> Devanagari Hindi only, `"hinglish"` -> Romanized Hinglish only). NEVER guess or assume!
 4. FREE-FORM AGENTIC PHRASING:
    - Understand ANY natural expression of intent ("20 Maggi sold", "bees maggi nikal gayi", "customer 20 maggi le gaya", "Inventory mein kitni Maggi padi hai?", "Ramesh ke khate mein 500 likh do", "Ramesh ne 500 de diye", "Naya customer Rahul add karo").
    - PRODUCT QUERY PRESERVATION (CRITICAL): NEVER narrow or append a size/variant from `catalog_candidates` or `active_context` into `product_query` if the user did NOT speak that size/variant! Copy the product name ONLY as spoken (e.g. if user says "One Maggi masala sold" or "Coke bik gayi", output `product_query: "Maggi masala"` or `"Coke"`, NEVER `"Maggi Masala 70g"` unless the user actually spoke `"70g"` / `"70 gram"`!). Also do NOT set `has_ambiguity_or_noise_conflict: true` just because multiple variants exist in `catalog_candidates` — output `confidence: 0.95` and `has_ambiguity_or_noise_conflict: false` so the backend renders the clickable product chips.
    - For Inventory CRUD: use `inventory_receive`, `inventory_damage`, `inventory_expiry`, `inventory_adjust`, `update_product_settings` (price/threshold updates), `archive_product`, or `query_business` (`query_topic: "stock_check"`).
    - For Khata (Customer Credit) CRUD: use `create_customer`, `update_customer`, `record_udhaar_credit` (direct credit without product), `record_customer_payment`, or `query_business` (`query_topic: "pending_payments"` or `"customer_balance"`).
 5. If the speaker gives MULTIPLE commands in one breath (e.g., "20 Maggi aayi, 10 Pepsi ki bottle aayi, 5 Maggi biki"), extract ALL operations in exact chronological order inside the `operations` array.
-6. CORRECTION VS NEW OPERATION (CRITICAL — DO NOT DUPLICATE):
-   - If the user is correcting ANY detail of the immediately previous transaction in `active_context` (`last_operation_kind`, `last_expense_id`, `last_sale_id`) — e.g. "20 pepsi nahi 10 hi biki", "Actually 7 the", "Cash nahi online", "Online nahi cash tha", "Last transaction cash se nahi online hua tha", "1000 nahi 500 tha", "galti se cash bol diya" — output `intent: "correct_last_operation"` (or `"correct_last_sale"` for sale qty) with `confidence: 0.96`, `has_ambiguity_or_noise_conflict: false`, `uses_prior_context: true`, and ONLY the corrected field(s) (`payment_method`, `payment_status`, `total_amount`, `quantity`, `unit_price`). NEVER emit `record_expense` or `record_sale` for a correction, and NEVER ask which transaction when `last_sale_id` or `last_expense_id` is in `active_context`!
+6. CORRECTION VS NEW OPERATION (CRITICAL — DO NOT DUPLICATE OR CROSS-CONTAMINATE):
+   - If the user is correcting ANY detail of an immediately previous transaction in `active_context` (`last_operation_kind`, `last_sale_id`, `last_expense_id`, `last_damage_operation_id`, `last_product_name`) — e.g.:
+     * Sale / payment corrections: "20 pepsi nahi 10 hi biki", "Actually 7 the", "Cash nahi online", "Online nahi cash tha", "Last transaction cash se nahi online hua tha", "galti se cash bol diya"
+     * Expense corrections: "1000 nahi 500 tha", "bijli bill cash nahi online diya"
+     * Damage / expiry / stock-receive corrections: "Sorry, 2 damage thay", "2 damaged the, ek nahi", "do nahi, bas ek hi damaged/demis tha", "14 Nescafe gold jars aaye the unme se 2 damaged the ek nahi", "20 nahi 15 aayi thi"
+     -> Output `intent: "correct_last_operation"` (or `"correct_last_sale"` for sale qty) with `confidence: 0.96`, `has_ambiguity_or_noise_conflict: false`, `uses_prior_context: true`, `product_query` ONLY if a product was named, and ONLY the field(s) that actually changed!
+     -> NEVER emit `record_expense`, `payment_method`, `total_amount`, or `description` for a damage/expiry/receive/sale quantity correction unless the user explicitly spoke an expense category or payment method (`cash`/`online`/`upi`/`rupees`). And NEVER emit `inventory_damage` a second time when the user is correcting a just-logged damage count ("ek nahi", "do nahi", "sorry 2 damage thay")!
    - Normalize Whisper STT & payment terms: "online" / "UBI" / "UPI" / "GPay" / "Google Pay" / "Google Paye" / "PhonePe" / "Paytm" -> `"upi"` (stored as `"upi"` internally, displayed as "Online"). Default to `"cash"` when unspecified.
    - For unpaid credit sales like "Nitin purchased 10 bottles of Coke but he did not paid" or "Nitin ko 10 Coke udhaar di", set `intent: "record_sale"`, `product_query`, `customer_query: "Nitin"`, `quantity: 10`, `payment_status: "credit"`, `paid_amount: 0`.
    - If user explicitly asks to add a new product ("Surf Excel naya product add kar do", "50 surf excel 100g packet new product aaya hai"), set `intent: "create_product"`, `product_query`, `quantity`, `unit`, `unit_price`.
@@ -76,7 +81,7 @@ SECURITY & PRECISION RULES:
 QUERY TOPIC RULES (CRITICAL — NEVER MIX TOPICS):
 - Asking about expenses/kharcha/spending ("Is there any expenses till now?", "Aaj kitna kharcha hua?", "Expenses batao") -> `intent: "query_business"`, `query_topic: "expenses_summary"`.
 - Asking about stock/inventory quantities ("Hamari inventory mein kitni Coca Cola hain?", "How much Maggi in stock?") -> `intent: "query_business"`, `query_topic: "stock_check"`, `product_query: "<item>"`.
-- Asking about sales/revenue ("Aaj kitni sale hui?", "Sales till now") -> `intent: "query_business"`, `query_topic: "sales_summary"`.
+- Asking about sales/revenue ("Aaj kitni sale hui?", "Sales till now", OR item-specific "Aaj Maggie ki kitni sales hui?", "How many Cokes sold today?") -> `intent: "query_business"`, `query_topic: "sales_summary"`, and set `product_query: "<item>"` when a specific item is asked (or `null` for overall store sales).
 - Asking about pending payments / udhaar / customer balance ("Ramesh ka kitna baki hai?", "Pending payments?") -> `intent: "query_business"`, `query_topic: "customer_balance"` or `"pending_payments"`.
 - Asking about overall day summary / profit ("Aaj ka poora hisaab", "Today's summary") -> `intent: "query_business"`, `query_topic: "daily_summary"`.
 """
@@ -107,7 +112,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         )
 
     if re.search(
-        r"(cash\s+(?:se\s+)?nahi|upi\s+(?:se\s+)?nahi|online\s+(?:se\s+)?nahi|ubi\s+se|upi\s+se|online\s+(?:hua|kiya|se)|last\s+transaction|galti\s+se|actually|ki\s+jagah|\d+.*\bnahi\b.*\d+)",
+        r"(cash\s+(?:se\s+)?nahi|upi\s+(?:se\s+)?nahi|online\s+(?:se\s+)?nahi|ubi\s+se|upi\s+se|online\s+(?:hua|kiya|se)|last\s+transaction|galti\s+se|actually|sorry|ki\s+jagah|instead\s+of|(?:\b\d+|\bek\b|\bdo\b|\bteen\b|\bchaar\b|\bpaanch\b)\s+(?:\w+\s+){0,2}nahi\b|\bnot\s+(?:\d+|one|two|three)\b|\bbas\s+(?:\d+|ek|do|teen)\s+hi\b)",
         lower,
     ):
         qty = extract_post_negation_number(utterance)
@@ -121,6 +126,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         elif re.search(r"\bbank\b", lower):
             pm = "bank"
         pstat = "credit" if re.search(r"\budhaar\b", lower) and not re.search(r"\budhaar\s+nahi\b", lower) else None
+        is_loss_or_stock = bool(re.search(r"\b(damage|damaged|demis|kharab|toot|expire|expired|aayi|aaya|receive|bik|biki|sold)\b", lower))
         if (pm is not None or pstat is not None) and qty is None:
             return IntentProposal(
                 detected_language=lang,  # type: ignore[arg-type]
@@ -139,7 +145,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
                 VoiceOperationItem(
                     intent="correct_last_operation",
                     quantity=qty,
-                    total_amount=qty,
+                    total_amount=None if is_loss_or_stock else qty,
                     payment_method=pm,  # type: ignore[arg-type]
                     uses_prior_context=True,
                 )
@@ -176,11 +182,19 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[VoiceOperationItem(intent="query_business", query_topic="daily_summary")],
         )
 
-    if re.search(r"(kitni sale|aaj ki sale|today.*sale|sales till now|pending|kitna payment|baki hai)", lower):
+    if re.search(r"(kitni sale|kitne sales|aaj ki sale|today.*sale|sales till now|pending|kitna payment|baki hai)", lower):
         topic = "pending_payments" if ("pending" in lower or "payment" in lower or "baki" in lower) else "sales_summary"
+        pq_clean: str | None = None
+        if topic == "sales_summary":
+            pq = re.sub(
+                r"\b(aaj|today|ki|ke|ka|kitni|kitne|sale|sales|hui|hua|hai|hain|till|now|total|batao|dikhao|how|many|much|sold)\b",
+                " ",
+                re.sub(r"[?!.,]+", " ", lower),
+            )
+            pq_clean = re.sub(r"\s+", " ", pq).strip() or None
         return IntentProposal(
             detected_language=lang,  # type: ignore[arg-type]
-            operations=[VoiceOperationItem(intent="query_business", query_topic=topic)],
+            operations=[VoiceOperationItem(intent="query_business", query_topic=topic, product_query=pq_clean)],
         )
 
     # Split multi-clause utterances ("20 Maggi aayi, 10 Pepsi aayi, 5 Maggi biki")

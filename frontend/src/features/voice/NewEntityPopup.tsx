@@ -1,7 +1,7 @@
 "use client";
 
-import React from "react";
-import { PackagePlus, Check, X, Mic } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { PackagePlus, Check, X, Mic, Loader2 } from "lucide-react";
 import type { BaseUnit, NewProductDraft } from "@/types/cue";
 
 export function NewEntityPopup({
@@ -12,10 +12,26 @@ export function NewEntityPopup({
 }: {
   draft: NewProductDraft | null;
   onChange: (next: NewProductDraft) => void;
-  onConfirm: (draft: NewProductDraft) => void;
+  onConfirm: (draft: NewProductDraft) => Promise<void> | void;
   onCancel: () => void;
 }) {
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setSubmitting(false);
+  }, [draft?.name, draft === null]);
+
   if (!draft) return null;
+
+  const handleConfirm = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onConfirm(draft);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/30 backdrop-blur-[2px] p-4">
@@ -127,17 +143,30 @@ export function NewEntityPopup({
           </span>
           <div className="flex items-center gap-2">
             <button
+              type="button"
+              disabled={submitting}
               onClick={onCancel}
-              className="px-3.5 py-2 rounded-lg text-xs font-medium text-ink-secondary border border-rule hover:bg-paper-subtle transition-colors"
+              className="px-3.5 py-2 rounded-lg text-xs font-medium text-ink-secondary border border-rule hover:bg-paper-subtle disabled:opacity-50 transition-colors"
             >
               Cancel
             </button>
             <button
-              onClick={() => onConfirm(draft)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-ink text-white hover:bg-ink/90 transition-colors"
+              type="button"
+              disabled={submitting}
+              onClick={handleConfirm}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-ink text-white hover:bg-ink/90 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
-              <Check className="w-3.5 h-3.5" />
-              Confirm &amp; Add
+              {submitting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  Confirm &amp; Add
+                </>
+              )}
             </button>
           </div>
         </div>

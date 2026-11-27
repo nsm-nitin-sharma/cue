@@ -58,6 +58,8 @@
 - [x] **Modular `LLMProvider` Interface:**
   - [x] Primary: **Google Gemini API (Free Tier)** with model fallback & deterministic Hinglish/English fallback parser (`deterministic_fallback_parse`)
   - [x] Optional local adapter: Ollama (disabled by default)
+- [x] **Strict Selected-Language Pipeline (STT + Reply + TTS):** Locking Settings to **English**, **Hindi**, or **Hinglish** enforces matching speech recognition (`Groq Whisper` tailored prompts + deterministic Devanagari→Latin Romanizer `romanize_devanagari_to_hinglish` for Hinglish), strict reply localization (`i18n_replies.py`), and matching neural voice output (`en-IN-NeerjaExpressiveNeural` vs `hi-IN-SwaraNeural`)
+- [x] **Scoped Corrections & Damage/Expiry/Receive Amendments:** Every committed action (`record_sale`, `record_expense`, `inventory_damage`, `inventory_expiry`, `inventory_receive`, `record_udhaar_credit`, `record_customer_payment`) updates `last_operation_kind` so follow-up fixes (`"Sorry, 2 damage thay"`, `"2 damaged the, ek nahi"`, `"do nahi, bas ek hi demis tha"`) never misroute into older expenses or sales; uses append-only reversal+replacement entries and excludes reversed movements from Damaged/Expired loss totals.
 - [x] Hindi, English, and Hinglish code-switching + Indian kirana vocabulary support
 
 ---
@@ -89,7 +91,7 @@
 - [x] **Cash ↔ Online ↔ Udhaar Payment Corrections (`correct_sale_payment` & expense corrections):**
   - [x] Phrases like `"Cash nahi online"`, `"Online nahi cash"`, `"cash nahi UBI se kia tha"`, and `"Last transaction cash se nahi online hua tha"` immediately update `last_sale_id` / `last_expense_id` via append-only audit trail (`status="corrected"`, `parent_sale_id` / `parent_expense_id`) without double-counting totals
   - [x] Clear payment-correction rescue ensures stale clarification prompts never block payment switches
-- [x] **Quantity Corrections (`correct_sale_quantity` / expense amount edits):** Handles post-negation targets (*"20 pepsi nahi 10 hi biki"*, *"Actually 7 the"*) while ignoring product weight specs (`250 gram`)
+- [x] **Quantity Corrections (`correct_sale_quantity` / expense amount edits):** Handles post-negation targets (*"20 pepsi nahi 10 hi biki"*, *"Actually 7 the"*) while ignoring product weight specs (`250 gram`) and keeping corrected sales `status="active"` so Today & Sales Ledger revenue immediately reflects the updated amount
 - [x] **One-Tap Receipt Reversal (`POST /api/v1/operations/{operation_id}/reverse`):** Reverses active sales, expenses, payments, and stock movements cleanly while logging audit history
 - [x] **30-Day Cross-Day Memory & `> 30 Days` Boundary Guard:** Queries last 30 days of chat + ledger; politely redirects `> 30 days` references to permanent Reports views
 - [x] **Business Day Replay:** Daily narration, relative dates (`aaj`, `kal`, `parso`), `transaction_date` vs `created_at` separation
@@ -100,11 +102,11 @@
 
 - [x] **Supabase Core Schema (`001_schema.sql`):** `businesses`, `business_members`, `products`, `product_aliases`, `product_unit_conversions`, `inventory`, `inventory_movements`, `customers`, `sales`, `sale_items`, `customer_payments`, `expenses`, `conversations`, `conversation_messages`, `voice_transactions`, `pending_confirmations`, `subscription_plans`, `business_subscriptions`, `business_insights_events`
 - [x] **Voice & UI Inventory (`/inventory`):**
-  - [x] Receive, Sale deduction, Damage/Expiry, Adjustment, Low-stock watch, Movement History, **Stock Queries** (*"Inventory mein kitni Coca-Cola hain?"*), & Soft-Archive
+  - [x] Receive, Sale deduction, Damage/Expiry, Adjustment, Low-stock watch, Movement History, **Dedicated `Damaged / Expired` Loss Tab**, **Stock Queries** (*"Inventory mein kitni Coca-Cola hain?"*), & Soft-Archive
   - [x] **Add Product, Edit Product Modal (`PATCH /api/v1/inventory/products/{id}`), & Clear Unused Items**
 - [x] **Voice & UI Sales (`/sales`):**
   - [x] Cash, Online (stored as `"upi"` in DB, displayed everywhere as `"Online"`), Partial, and Udhaar sales
-  - [x] Sales Ledger filters (period / payment type), real-time profit & revenue summary (filtering strictly on `status === "active"`), and clear `"Cash"` / `"Online"` / `"Udhaar"` pills
+  - [x] Sales Ledger filters (period / payment type), real-time profit & revenue summary (filtering strictly on `status === "active"`), **Item-Specific Sales Queries** (*"Aaj Maggie ki kitni sales hui?"*), and clear `"Cash"` / `"Online"` / `"Udhaar"` pills
 - [x] **Voice & UI Khata (`/customers`):**
   - [x] Create customer, query balances, add direct Udhaar (*"Ramesh ke khate mein 500 likh do"*), collect repayments (`POST /api/v1/customers/payments`), per-customer Khata history view, & **Edit Customer Modal (`PATCH /api/v1/customers/{id}`)**
   - [x] **Udhaar Repayment → Sales & Revenue Inclusion (`record_customer_payment`):** Paying any Udhaar (via Voice or Khata UI) automatically FIFO-settles unpaid/partial `sales` rows (`Udhaar` → `Cash`/`Online`/`Partial`), converts prior-day/opening-balance repayments cleanly into Today's Collected Revenue & Sales totals without double-counting, and supports clean Reversal rollback

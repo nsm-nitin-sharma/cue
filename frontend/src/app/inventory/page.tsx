@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Search, Plus, Tag, ArrowDownUp, Archive, Sparkles, Pencil, X } from "lucide-react";
+import { Search, Plus, Tag, ArrowDownUp, Archive, Sparkles, Pencil, X, AlertTriangle } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPill, Amount } from "@/components/ui/LedgerPrimitives";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
@@ -12,7 +12,26 @@ export default function InventoryPage() {
   const { products, movements, addManualProduct, updateProduct, archiveProduct, clearUnusedCatalog } =
     useCueWorkspace();
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<"stock" | "movements">("stock");
+  const [tab, setTab] = useState<"stock" | "movements" | "losses">("stock");
+  const reversedMovementIds = new Set(
+    movements
+      .filter((m) => m.movementType === "reversal" && m.referenceId)
+      .map((m) => m.referenceId as string)
+  );
+  const lossMovements = movements.filter(
+    (m) => (m.movementType === "damage" || m.movementType === "expiry") && !reversedMovementIds.has(m.id)
+  );
+  const damagedCount = lossMovements
+    .filter((m) => m.movementType === "damage")
+    .reduce((acc, m) => acc + Math.abs(m.quantityDelta), 0);
+  const expiredCount = lossMovements
+    .filter((m) => m.movementType === "expiry")
+    .reduce((acc, m) => acc + Math.abs(m.quantityDelta), 0);
+  const lossValue = lossMovements.reduce((acc, m) => {
+    const prod = products.find((p) => p.id === m.productId);
+    const rate = m.unitCost ?? prod?.costPrice ?? 0;
+    return acc + Math.abs(m.quantityDelta) * rate;
+  }, 0);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -131,6 +150,20 @@ export default function InventoryPage() {
                 >
                   <ArrowDownUp className="w-3.5 h-3.5" />
                   Movements ({movements.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTab("losses")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors inline-flex items-center gap-1.5 ${
+                    tab === "losses"
+                      ? "bg-crimson text-white"
+                      : lossMovements.length > 0
+                        ? "text-crimson hover:bg-crimson-soft/40"
+                        : "text-ink-secondary hover:text-ink"
+                  }`}
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Damaged / Expired ({lossMovements.length})
                 </button>
               </div>
 
@@ -366,7 +399,7 @@ export default function InventoryPage() {
                 </table>
               </div>
             </div>
-          ) : (
+          ) : tab === "movements" ? (
             <div className="bg-paper-elevated border border-rule rounded-2xl shadow-slip overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
@@ -417,6 +450,69 @@ export default function InventoryPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-4 rounded-2xl bg-paper-elevated border border-rule">
+                  <p className="text-[10px] font-mono uppercase text-ink-muted">Damaged Units</p>
+                  <p className="text-lg font-mono font-semibold text-crimson mt-0.5">{damagedCount}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-paper-elevated border border-rule">
+                  <p className="text-[10px] font-mono uppercase text-ink-muted">Expired Units</p>
+                  <p className="text-lg font-mono font-semibold text-ochre mt-0.5">{expiredCount}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-paper-elevated border border-rule">
+                  <p className="text-[10px] font-mono uppercase text-ink-muted">Estimated Loss Value</p>
+                  <Amount value={lossValue} className="text-lg font-semibold text-crimson mt-0.5 block" />
+                </div>
+              </div>
+
+              <div className="bg-paper-elevated border border-rule rounded-2xl shadow-slip overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-rule bg-paper/70 text-[11px] font-mono uppercase tracking-wider text-ink-muted">
+                        <th className="py-3 px-4">Date</th>
+                        <th className="py-3 px-4">Product</th>
+                        <th className="py-3 px-4">Reason</th>
+                        <th className="py-3 px-4 text-right">Qty Lost</th>
+                        <th className="py-3 px-4">Notes</th>
+                        <th className="py-3 px-4 text-right">Op ID</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-rule text-sm">
+                      {lossMovements.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-10 px-4 text-center text-xs text-ink-muted">
+                            No damaged or expired items logged yet. Say &ldquo;3 Pepsi damaged hain&rdquo; or &ldquo;2 Maggi expired thi&rdquo; to track losses.
+                          </td>
+                        </tr>
+                      )}
+                      {lossMovements.map((m) => (
+                        <tr key={m.id} className="hover:bg-paper/60 transition-colors">
+                          <td className="py-3 px-4 font-mono text-xs text-ink-secondary">
+                            {m.transactionDate}
+                          </td>
+                          <td className="py-3 px-4 font-medium text-ink">{m.productName}</td>
+                          <td className="py-3 px-4">
+                            <StatusPill tone={m.movementType === "damage" ? "crimson" : "ochre"}>
+                              {m.movementType === "damage" ? "Damaged" : "Expired"}
+                            </StatusPill>
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold text-crimson">
+                            {Math.abs(m.quantityDelta)} {m.unit}
+                          </td>
+                          <td className="py-3 px-4 text-xs text-ink-secondary">{m.notes}</td>
+                          <td className="py-3 px-4 text-right font-mono text-[11px] text-ink-muted">
+                            {formatShortOp(m.operationId)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
