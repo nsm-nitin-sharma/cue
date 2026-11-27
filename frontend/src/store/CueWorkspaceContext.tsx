@@ -117,7 +117,7 @@ const INITIAL_PRODUCTS: Product[] = [
     sellingPrice: 20,
     stock: 24,
     lowStockThreshold: 10,
-    aliases: ["pepsi 500ml", "chhoti pepsi"],
+    aliases: ["pepsi 500ml", "chhoti pepsi", "chotti pepsi"],
   },
   {
     id: "prod-pepsi-2l",
@@ -1562,9 +1562,10 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         return;
       }
 
-      // 5. Correction ("Actually 7 the")
-      if (/actually|nahi\s*\d+|galti se/i.test(lower) && lastContext.lastSaleId) {
-        const newQty = parseIndianNumber(text);
+      // 5. Correction ("Actually 7 the" or "20 pepsi nahi 10 hi biki")
+      if (/(actually|nahi|galti se|ki jagah|\bhi\b.*(?:biki|aayi|the|chahiye))/i.test(lower) && lastContext.lastSaleId) {
+        const postNeg = lower.split(/\bnahi\b|\bki jagah\b|\binstead\b/).pop() ?? text;
+        const newQty = parseIndianNumber(postNeg) ?? parseIndianNumber(text);
         const targetSale = sales.find((s) => s.id === lastContext.lastSaleId);
         if (newQty !== null && targetSale && targetSale.items.length > 0) {
           const item = targetSale.items[0];
@@ -1941,7 +1942,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
       }
 
       // 13. Ambiguous Pepsi ("Aaj supplier se 20 Pepsi bottles aayi hain")
-      if (/pepsi/i.test(lower) && !/500|2l|2 l|chhoti|badi/i.test(lower)) {
+      if (/pepsi|pespsi/i.test(lower) && !/500|2l|2 l|chhoti|chotti|badi|baddi/i.test(lower)) {
         const qty = parseIndianNumber(text) ?? 20;
         const isSale = /(bik|bech|sale)/i.test(lower);
         const matches = products.filter((p) => p.name.toLowerCase().includes("pepsi"));

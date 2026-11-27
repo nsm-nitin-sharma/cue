@@ -90,7 +90,7 @@
 - [ ] Same-day anaphora & multi-turn context (*"20 Pepsi bottles aayi hain"* → *"Unmein se 3 damaged hain"* → net `+17`)
 - [ ] **30-Day (1-Month) Cross-Day Memory Retrieval:** Queries past 30 days of `conversation_messages` + ledger transactions (e.g., *"Kal jo Pepsi aayi thi, wo expired thi"*)
 - [ ] **`> 30 Days` Boundary Guard:** References older than 30 days (e.g., *"Do mahine pehle..."*) gracefully explain the 30-day chat memory window and point to permanent **Reports / Ledger** views
-- [ ] **Corrections, Reversals & Undo:** (*"10 packets bik gaye"* → *"Actually 7 the"* adjusts net stock/amount atomically and logs `audit_trail`)
+- [ ] **Corrections, Reversals & Undo:** (*"10 packets bik gaye"* → *"Actually 7 the"* OR *"20 chotti pepsi bik gyi"* → *"20 pepsi nahi 10 hi biki"*) extracts post-negation target quantities, adjusts net stock/amount atomically, and logs immutable `audit_trail`
 - [ ] **Business Day Replay:** Multi-transaction end-of-day narration, missing-info prompts, relative dates (`aaj`, `kal`, `parso`), `transaction_date` vs `created_at` separation in `Asia/Kolkata`, and Daily Business Summary generation
 
 ---
