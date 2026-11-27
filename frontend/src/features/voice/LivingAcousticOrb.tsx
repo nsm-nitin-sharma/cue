@@ -376,7 +376,7 @@ export function LivingAcousticOrb() {
   const ring1Scale = isRecording ? 1.12 + audioEnergy * 0.28 : 1;
 
   return (
-    <div className="relative z-20 pb-4 pt-3 px-4 flex flex-col items-center bg-paper">
+    <div className="relative z-20 pb-5 pt-6 px-4 flex flex-col items-center bg-gradient-to-t from-paper via-paper/95 to-transparent backdrop-blur-[2px]">
       {/* Live Speech Caption + Dynamic Equalizer */}
       {isRecording && (
         <div className="mb-6 max-w-xl text-center bg-paper-elevated/95 border border-rule-strong rounded-2xl px-5 py-3 shadow-dock animate-slip-in">
