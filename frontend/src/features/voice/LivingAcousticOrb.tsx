@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Square, Keyboard, ListChecks, ArrowUp, X, Loader2 } from "lucide-react";
+import { Mic, Keyboard, ListChecks, ArrowUp, X, Loader2 } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { StatusPill } from "@/components/ui/LedgerPrimitives";
 import { stopSpeaking } from "@/lib/tts";
@@ -81,15 +81,17 @@ export function LivingAcousticOrb() {
     voicePhase,
     setVoicePhase,
     statusMessage,
+    setStatusMessage,
     submitCommand,
     submitAudioTurn,
     isLiveBackend,
     isOffline,
-  } = useCueWorkspace();
+  } = useCueWorkspace() as ReturnType<typeof useCueWorkspace> & { setStatusMessage?: (m: string) => void };
 
   const [isRecording, setIsRecording] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [audioEnergy, setAudioEnergy] = useState(0);
+  const [freqBars, setFreqBars] = useState<number[]>([0.2, 0.35, 0.5, 0.35, 0.2]);
   const [showTypeBar, setShowTypeBar] = useState(false);
   const [showSamples, setShowSamples] = useState(false);
   const [textInput, setTextInput] = useState("");
@@ -103,28 +105,70 @@ export function LivingAcousticOrb() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstanceLike | null>(null);
   const liveTranscriptRef = useRef<string>("");
+  const discardOnStopRef = useRef<boolean>(false);
+  const isRecordingRef = useRef<boolean>(false);
 
-  const stopRecording = useCallback(() => {
+  const cleanupStreams = useCallback(() => {
+    isRecordingRef.current = false;
     setIsRecording(false);
     setAudioEnergy(0);
+    setFreqBars([0.2, 0.35, 0.5, 0.35, 0.2]);
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
     }
-
     try {
       recognitionRef.current?.stop();
     } catch {
       // Ignore already stopped
     }
+    recognitionRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+  }, []);
 
+  const cancelRecording = useCallback(() => {
+    discardOnStopRef.current = true;
+    const recorder = mediaRecorderRef.current;
+    chunksRef.current = [];
+    setLiveTranscript("");
+    liveTranscriptRef.current = "";
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = () => {
+        chunksRef.current = [];
+        discardOnStopRef.current = false;
+      };
+      recorder.stop();
+    } else {
+      discardOnStopRef.current = false;
+    }
+    cleanupStreams();
+    setVoicePhase("idle");
+    if (typeof setStatusMessage === "function") setStatusMessage("Cancelled");
+  }, [cleanupStreams, setStatusMessage, setVoicePhase]);
+
+  const stopRecording = useCallback(() => {
+    discardOnStopRef.current = false;
     const recorder = mediaRecorderRef.current;
     const capturedText = liveTranscriptRef.current.trim();
     setLiveTranscript("");
     liveTranscriptRef.current = "";
 
+    cleanupStreams();
+
     if (recorder && recorder.state !== "inactive") {
       recorder.onstop = () => {
+        if (discardOnStopRef.current) {
+          chunksRef.current = [];
+          discardOnStopRef.current = false;
+          return;
+        }
         const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current });
         chunksRef.current = [];
         if (isLiveBackend && blob.size > 400) {
@@ -143,22 +187,15 @@ export function LivingAcousticOrb() {
     } else {
       setVoicePhase("idle");
     }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-
-    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-  }, [isLiveBackend, setVoicePhase, submitAudioTurn, submitCommand]);
+  }, [cleanupStreams, isLiveBackend, setVoicePhase, submitAudioTurn, submitCommand]);
 
   const startRecording = useCallback(async () => {
     stopSpeaking();
+    discardOnStopRef.current = false;
     setMicError(null);
     setShowSamples(false);
+    setLiveTranscript("");
+    liveTranscriptRef.current = "";
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setMicError("Microphone unavailable. Use command input.");
       setShowTypeBar(true);
@@ -209,51 +246,76 @@ export function LivingAcousticOrb() {
       const sampleEnergy = () => {
         analyser.getByteFrequencyData(dataArray);
         const avg = dataArray.reduce((a, b) => a + b, 0) / Math.max(1, dataArray.length);
-        setAudioEnergy(Math.min(1, avg / 110));
+        setAudioEnergy(Math.min(1, avg / 95));
+        const bands = [2, 5, 9, 14, 20].map((idx) =>
+          Math.max(0.18, Math.min(1, (dataArray[idx] ?? 0) / 140))
+        );
+        setFreqBars(bands);
         animFrameRef.current = requestAnimationFrame(sampleEnergy);
       };
       sampleEnergy();
 
+      isRecordingRef.current = true;
+      setIsRecording(true);
+      setVoicePhase("listening");
+
+      // Always enable Web Speech API strictly for live on-screen caption preview while speaking
       const win = window as unknown as {
         SpeechRecognition?: new () => SpeechRecognitionInstanceLike;
         webkitSpeechRecognition?: new () => SpeechRecognitionInstanceLike;
       };
-      const SpeechRec = !(isLiveBackend && !isOffline)
-        ? win.SpeechRecognition || win.webkitSpeechRecognition
-        : undefined;
+      const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
       if (SpeechRec) {
-        const rec = new SpeechRec();
-        rec.lang = language === "hi" ? "hi-IN" : "en-IN";
-        rec.continuous = true;
-        rec.interimResults = true;
-        rec.onresult = (event) => {
-          let combined = "";
-          for (let i = 0; i < event.results.length; i += 1) {
-            combined += event.results[i][0].transcript + " ";
+        const startPreviewRec = () => {
+          if (!isRecordingRef.current) return;
+          try {
+            const rec = new SpeechRec() as SpeechRecognitionInstanceLike & { onend?: () => void };
+            rec.lang = language === "hi" ? "hi-IN" : "en-IN";
+            rec.continuous = true;
+            rec.interimResults = true;
+            rec.onresult = (event) => {
+              let combined = "";
+              for (let i = 0; i < event.results.length; i += 1) {
+                combined += event.results[i][0].transcript + " ";
+              }
+              const clean = combined.trim();
+              if (clean) {
+                liveTranscriptRef.current = clean;
+                setLiveTranscript(clean);
+              }
+            };
+            rec.onerror = () => {};
+            rec.onend = () => {
+              if (isRecordingRef.current) {
+                setTimeout(startPreviewRec, 120);
+              }
+            };
+            rec.start();
+            recognitionRef.current = rec;
+          } catch {
+            // Ignore caption preview init errors; MediaRecorder still captures audio cleanly
           }
-          const clean = combined.trim();
-          liveTranscriptRef.current = clean;
-          setLiveTranscript(clean);
         };
-        rec.onerror = () => {};
-        rec.start();
-        recognitionRef.current = rec;
+        startPreviewRec();
       }
-
-      setIsRecording(true);
-      setVoicePhase("listening");
     } catch {
+      cleanupStreams();
       setMicError("Microphone permission required — or use Type command.");
       setShowTypeBar(true);
       setVoicePhase("error");
     }
-  }, [language, setVoicePhase]);
+  }, [cleanupStreams, language, setVoicePhase]);
 
   const isProcessing = voicePhase === "transcribing" || voicePhase === "validating";
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = document.activeElement?.tagName;
+      if (e.key === "Escape" && isRecording) {
+        e.preventDefault();
+        cancelRecording();
+        return;
+      }
       if (
         (e.ctrlKey && e.key.toLowerCase() === "m") ||
         (e.code === "Space" && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT")
@@ -266,7 +328,7 @@ export function LivingAcousticOrb() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isProcessing, isRecording, startRecording, stopRecording]);
+  }, [cancelRecording, isProcessing, isRecording, startRecording, stopRecording]);
 
   const handleTextSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -291,15 +353,26 @@ export function LivingAcousticOrb() {
   const ring2Scale = isRecording ? 1.28 + audioEnergy * 0.58 : 1;
 
   return (
-    <div className="relative z-20 pb-6 pt-3 px-4 flex flex-col items-center bg-gradient-to-t from-paper via-paper/95 to-transparent">
-      {/* Live Editorial Speech Caption */}
+    <div className="relative z-20 pb-5 pt-6 px-4 flex flex-col items-center bg-gradient-to-t from-paper via-paper/95 to-transparent backdrop-blur-[2px]">
+      {/* Live Speech Caption + Dynamic Equalizer */}
       {isRecording && (
-        <div className="mb-5 max-w-xl text-center animate-slip-in">
-          <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-vermilion mb-1.5">
-            Listening · Audio Stream Active
-          </p>
-          <p className="text-xl sm:text-2xl font-medium tracking-tight text-ink leading-snug">
-            {liveTranscript || "“Speak naturally in Hindi, Hinglish, or English…”"}
+        <div className="mb-4 max-w-xl text-center bg-paper-elevated/95 border border-rule-strong rounded-2xl px-5 py-3 shadow-dock animate-slip-in">
+          <div className="flex items-center justify-center gap-2 mb-1.5">
+            <span className="flex items-end gap-0.5 h-3">
+              {freqBars.map((b, i) => (
+                <span
+                  key={i}
+                  className="w-0.5 rounded-full bg-vermilion transition-all duration-75"
+                  style={{ height: `${Math.round(b * 12)}px` }}
+                />
+              ))}
+            </span>
+            <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-vermilion">
+              Listening · Audio Active
+            </p>
+          </div>
+          <p className="text-base sm:text-lg font-medium tracking-tight text-ink leading-snug">
+            {liveTranscript || "Listening — speak now (press Esc or Cancel to discard)…"}
           </p>
         </div>
       )}
@@ -370,48 +443,97 @@ export function LivingAcousticOrb() {
         </form>
       )}
 
-      {/* Precision Enterprise Voice Console Core */}
+      {/* Precision Enterprise Living Voice Core */}
       <div className="relative flex items-center justify-center my-1">
-        <span
-          className={`absolute w-20 h-20 rounded-full border border-vermilion/25 pointer-events-none transition-transform duration-75 ${
-            isRecording ? "" : "animate-halo-outer"
-          }`}
-          style={isRecording ? { transform: `scale(${ring2Scale})`, opacity: 0.25 + audioEnergy * 0.45 } : undefined}
-        />
+        <div className="relative flex items-center justify-center">
+          {/* Fluid Ambient Rotating Halo */}
+          <span
+            className={`absolute -inset-3 rounded-full pointer-events-none transition-all duration-300 ${
+              isProcessing
+                ? "opacity-25 bg-gradient-to-tr from-ochre/25 via-transparent to-vermilion/20 animate-orb-halo"
+                : isRecording
+                  ? "bg-gradient-to-tr from-vermilion/35 via-ochre/20 to-vermilion/35 blur-md"
+                  : "bg-gradient-to-tr from-vermilion/25 via-transparent to-sage/20 blur-[5px] animate-orb-halo"
+            }`}
+            style={
+              isRecording
+                ? { transform: `scale(${ring2Scale})`, opacity: 0.45 + audioEnergy * 0.55 }
+                : undefined
+            }
+          />
 
-        <span
-          className={`absolute w-20 h-20 rounded-full bg-vermilion/10 pointer-events-none transition-transform duration-75 ${
-            isRecording ? "" : "animate-halo-idle"
-          }`}
-          style={isRecording ? { transform: `scale(${ring1Scale})`, opacity: 0.35 + audioEnergy * 0.5 } : undefined}
-        />
+          <span
+            className={`absolute w-20 h-20 rounded-full border border-vermilion/25 pointer-events-none transition-transform duration-75 ${
+              isRecording ? "" : "animate-halo-outer"
+            }`}
+            style={isRecording ? { transform: `scale(${ring2Scale})`, opacity: 0.25 + audioEnergy * 0.45 } : undefined}
+          />
 
+          <span
+            className={`absolute w-20 h-20 rounded-full bg-vermilion/10 pointer-events-none transition-transform duration-75 ${
+              isRecording ? "" : "animate-halo-idle"
+            }`}
+            style={isRecording ? { transform: `scale(${ring1Scale})`, opacity: 0.35 + audioEnergy * 0.5 } : undefined}
+          />
+
+          <button
+            type="button"
+            disabled={isProcessing}
+            onClick={isRecording ? stopRecording : startRecording}
+            aria-label={
+              isProcessing
+                ? "Processing command"
+                : isRecording
+                  ? "Stop and send voice command"
+                  : "Start voice command"
+            }
+            className={`relative w-[76px] h-[76px] rounded-full flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-orb border ${
+              isProcessing
+                ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95"
+                : isRecording
+                  ? "bg-gradient-to-b from-vermilion to-[#C93B1F] border-vermilion text-white scale-105"
+                  : "bg-gradient-to-b from-[#1E293B] to-ink hover:from-vermilion hover:to-[#C93B1F] border-ink hover:border-vermilion text-white animate-orb-breathe"
+            }`}
+          >
+            {isProcessing ? (
+              <Loader2 className="w-6 h-6 animate-spin" />
+            ) : isRecording ? (
+              <div className="flex items-center justify-center gap-1 h-6">
+                {freqBars.map((b, i) => (
+                  <span
+                    key={i}
+                    className="w-1 rounded-full bg-white transition-all duration-75"
+                    style={{ height: `${Math.max(6, Math.round(b * 24))}px` }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="relative flex flex-col items-center justify-center gap-0.5">
+                <Mic className="w-5 h-5 stroke-[1.8]" />
+                <div className="flex items-end gap-[2px] h-1.5 opacity-75">
+                  <span className="w-[2px] h-full rounded-full bg-white/80 animate-orb-wave" style={{ animationDelay: "0ms" }} />
+                  <span className="w-[2px] h-full rounded-full bg-white/95 animate-orb-wave" style={{ animationDelay: "180ms" }} />
+                  <span className="w-[2px] h-full rounded-full bg-white/80 animate-orb-wave" style={{ animationDelay: "360ms" }} />
+                </div>
+              </div>
+            )}
+          </button>
+        </div>
+
+        {/* Cancel Recording Pill while actively speaking */}
         <button
           type="button"
-          disabled={isProcessing}
-          onClick={isRecording ? stopRecording : startRecording}
-          aria-label={
-            isProcessing
-              ? "Processing command"
-              : isRecording
-                ? "Stop listening"
-                : "Start voice command"
-          }
-          className={`relative w-[74px] h-[74px] rounded-full flex items-center justify-center transition-all duration-300 shadow-orb border ${
-            isProcessing
-              ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95"
-              : isRecording
-                ? "bg-vermilion border-vermilion text-white scale-105"
-                : "bg-ink hover:bg-vermilion border-ink hover:border-vermilion text-white animate-orb-breathe"
+          onClick={cancelRecording}
+          aria-label="Cancel voice recording"
+          aria-hidden={!isRecording}
+          className={`absolute left-[calc(50%+54px)] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink-secondary hover:text-crimson hover:border-crimson/40 shadow-slip transition-all duration-200 ${
+            isRecording
+              ? "opacity-100 translate-x-0 pointer-events-auto"
+              : "opacity-0 -translate-x-2 pointer-events-none"
           }`}
         >
-          {isProcessing ? (
-            <Loader2 className="w-6 h-6 animate-spin" />
-          ) : isRecording ? (
-            <Square className="w-5 h-5 fill-current" />
-          ) : (
-            <Mic className="w-6 h-6 stroke-[1.75]" />
-          )}
+          <X className="w-3.5 h-3.5" />
+          <span>Cancel</span>
         </button>
       </div>
 
@@ -420,7 +542,7 @@ export function LivingAcousticOrb() {
         <div className="flex items-center gap-2">
           <StatusPill tone={phaseTone} dot={voicePhase === "listening" || isProcessing}>
             {isRecording
-              ? "Listening"
+              ? "Tap orb to send · Esc to cancel"
               : isProcessing
                 ? "Processing..."
                 : isOffline

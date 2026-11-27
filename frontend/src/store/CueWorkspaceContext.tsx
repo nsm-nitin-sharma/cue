@@ -86,6 +86,7 @@ interface CueWorkspaceContextValue {
   voicePhase: VoicePhase;
   setVoicePhase: (phase: VoicePhase) => void;
   statusMessage: string;
+  setStatusMessage: (msg: string) => void;
   products: Product[];
   movements: InventoryMovement[];
   customers: Customer[];
@@ -2687,6 +2688,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         voicePhase,
         setVoicePhase,
         statusMessage,
+        setStatusMessage,
         products,
         movements,
         customers,

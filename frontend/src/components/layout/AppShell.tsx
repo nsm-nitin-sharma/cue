@@ -81,7 +81,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     store.tier === "free" ? "Free" : store.tier === "growth" ? "Growth" : "Pro";
 
   return (
-    <div className="min-h-screen flex flex-col bg-paper text-ink relative">
+    <div className="h-screen overflow-hidden flex flex-col bg-paper text-ink relative">
       {/* Precision Institutional Top Bar */}
       <header className="sticky top-0 z-30 h-14 px-4 sm:px-8 flex items-center justify-between gap-4 bg-paper-elevated/95 backdrop-blur-md border-b border-rule">
         {/* Left: Monogram + Business + Active Day */}
@@ -127,40 +127,48 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        {/* Right: Live Register Ticker + Controls */}
+        {/* Right: Distinct Status, Sales Ticker, Store Menu & Settings */}
         <div className="flex items-center gap-2">
           {(isOffline || offlineQueue.length > 0) && (
             <button
               type="button"
               onClick={() => setRegisterOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-ochre-soft text-ochre border border-ochre/25"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-ochre-soft text-ochre border border-ochre/25 transition-colors hover:border-ochre/50"
             >
               <WifiOff className="w-3 h-3" />
               <span>{offlineQueue.length} queued</span>
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => setRegisterOpen(true)}
-            className="inline-flex items-center gap-2 px-3 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
+          {/* 1. Separate Status Pill */}
+          <span
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono bg-paper border border-rule text-ink-secondary"
             title={isLiveBackend ? "Connected to Live Cloud Store" : "Local Mode — Sign in for Live AI"}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? "bg-sage" : "bg-ochre"}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? "bg-sage animate-pulse" : "bg-ochre"}`} />
+            <span>{isLiveBackend ? "Live" : isDemoMode ? "Demo" : "Local"}</span>
+          </span>
+
+          {/* 2. Separate Today Sales Pill */}
+          <Link
+            href="/sales"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
+            title="View Sales Ledger"
+          >
             <span className="hidden lg:inline text-[10px] font-mono uppercase tracking-wider text-ink-muted">
-              {isLiveBackend ? "Live" : isDemoMode ? "Demo" : "Local"}
+              Today
             </span>
             <span className="font-mono tabular-nums font-semibold text-ink">
               {formatINR(todayStats.salesTotal)}
             </span>
             {todayStats.lowStockProducts.length > 0 && (
-              <span className="hidden sm:inline text-[11px] text-ochre font-mono">
+              <span className="hidden md:inline text-[11px] text-ochre font-mono">
                 · {todayStats.lowStockProducts.length} low
               </span>
             )}
-            <SlidersHorizontal className="w-3.5 h-3.5 text-ink-muted" />
-          </button>
+          </Link>
 
+          {/* 3. Store & Account Popover Pill */}
           {authUser ? (
             <div className="relative">
               <button
@@ -170,77 +178,80 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 aria-expanded={accountMenuOpen}
                 aria-haspopup="menu"
               >
-                <span className="w-5 h-5 rounded bg-ink text-paper-elevated flex items-center justify-center shrink-0">
-                  <Store className="w-3 h-3" />
+                <span className="w-4 h-4 rounded bg-ink text-paper-elevated flex items-center justify-center shrink-0">
+                  <Store className="w-2.5 h-2.5" />
                 </span>
-                <span className="hidden sm:inline max-w-[160px] truncate font-medium text-ink">
+                <span className="hidden sm:inline max-w-[140px] truncate font-medium text-ink">
                   {store.name && store.name !== "My Store" ? store.name : "My Store"}
                 </span>
-                <ChevronDown className={`w-3.5 h-3.5 text-ink-muted transition-transform duration-150 ${accountMenuOpen ? "rotate-180" : ""}`} />
+                <ChevronDown className={`w-3.5 h-3.5 text-ink-muted transition-transform duration-200 ${accountMenuOpen ? "rotate-180" : ""}`} />
               </button>
 
               {accountMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setAccountMenuOpen(false)}
-                  />
-                  <div
-                    role="menu"
-                    className="absolute right-0 mt-2 w-64 rounded-xl bg-paper-elevated border border-rule-strong shadow-dock z-50 overflow-hidden animate-slip-in"
-                  >
-                    <div className="p-3.5 border-b border-rule bg-paper/60">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-xs font-semibold text-ink truncate">
-                          {store.name || "My Store"}
-                        </p>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase bg-paper-subtle border border-rule text-ink-secondary shrink-0">
-                          {tierLabel}
-                        </span>
-                      </div>
-                      {store.city && (
-                        <p className="text-[11px] text-ink-muted mt-0.5 truncate">{store.city}</p>
-                      )}
-                    </div>
-
-                    <div className="p-3.5 border-b border-rule space-y-1">
-                      <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
-                        <UserCheck className="w-3 h-3 text-sage shrink-0" />
-                        <span>Signed in as</span>
-                      </div>
-                      <p className="text-xs font-medium text-ink truncate">{authUser.name}</p>
-                      {authUser.email && authUser.email !== authUser.name && (
-                        <p className="text-[11px] font-mono text-ink-muted truncate">{authUser.email}</p>
-                      )}
-                    </div>
-
-                    <div className="p-1.5 space-y-0.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAccountMenuOpen(false);
-                          setRegisterOpen(true);
-                        }}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs text-ink-secondary hover:text-ink hover:bg-paper transition-colors text-left"
-                      >
-                        <SlidersHorizontal className="w-3.5 h-3.5" />
-                        Store &amp; System Controls
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAccountMenuOpen(false);
-                          signOut();
-                        }}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium text-crimson hover:bg-paper transition-colors text-left"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        Sign Out
-                      </button>
-                    </div>
-                  </div>
-                </>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setAccountMenuOpen(false)}
+                />
               )}
+              <div
+                role="menu"
+                aria-hidden={!accountMenuOpen}
+                className={`absolute right-0 mt-2 w-64 rounded-xl bg-paper-elevated border border-rule-strong shadow-dock z-50 overflow-hidden transition-all duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] origin-top-right ${
+                  accountMenuOpen
+                    ? "opacity-100 scale-100 translate-y-0 pointer-events-auto"
+                    : "opacity-0 scale-95 -translate-y-1 pointer-events-none"
+                }`}
+              >
+                <div className="p-3.5 border-b border-rule bg-paper/60">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-ink truncate">
+                      {store.name || "My Store"}
+                    </p>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase bg-paper-subtle border border-rule text-ink-secondary shrink-0">
+                      {tierLabel}
+                    </span>
+                  </div>
+                  {store.city && (
+                    <p className="text-[11px] text-ink-muted mt-0.5 truncate">{store.city}</p>
+                  )}
+                </div>
+
+                <div className="p-3.5 border-b border-rule space-y-1">
+                  <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
+                    <UserCheck className="w-3 h-3 text-sage shrink-0" />
+                    <span>Signed in as</span>
+                  </div>
+                  <p className="text-xs font-medium text-ink truncate">{authUser.name}</p>
+                  {authUser.email && authUser.email !== authUser.name && (
+                    <p className="text-[11px] font-mono text-ink-muted truncate">{authUser.email}</p>
+                  )}
+                </div>
+
+                <div className="p-1.5 space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountMenuOpen(false);
+                      setRegisterOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs text-ink-secondary hover:text-ink hover:bg-paper transition-colors text-left"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    Store &amp; System Controls
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountMenuOpen(false);
+                      signOut();
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium text-crimson hover:bg-paper transition-colors text-left"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    Sign Out
+                  </button>
+                </div>
+              </div>
             </div>
           ) : (
             <Link
@@ -251,6 +262,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <span>Sign In</span>
             </Link>
           )}
+
+          {/* 4. Separate Settings Button */}
+          <button
+            type="button"
+            onClick={() => setRegisterOpen(true)}
+            className="p-1.5 rounded-md bg-paper border border-rule hover:border-rule-strong text-ink-secondary hover:text-ink transition-colors"
+            title="Store Settings & Controls"
+            aria-label="Open settings"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+          </button>
         </div>
       </header>
 
@@ -332,69 +354,88 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </Link>
       )}
 
-      {/* Slide-Over Drawer 1: 30-Day Daily Ledger History */}
-      {historyOpen && (
-        <div className="fixed inset-0 z-50 flex justify-start bg-ink/25 backdrop-blur-[2px] animate-fade-backdrop">
-          <div className="w-full max-w-sm bg-paper-elevated h-full border-r border-rule shadow-dock flex flex-col animate-drawer-left">
-            <div className="px-5 py-4 border-b border-rule flex items-center justify-between">
-              <div>
-                <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">
-                  30-Day Rolling Context Window
-                </p>
-                <h2 className="text-sm font-semibold text-ink mt-0.5">Daily Ledger Sessions</h2>
-              </div>
-              <button
-                onClick={() => setHistoryOpen(false)}
-                className="p-1.5 rounded-md text-ink-muted hover:text-ink hover:bg-paper-subtle"
-              >
-                <X className="w-4 h-4" />
-              </button>
+      {/* Slide-Over Drawer 1: 30-Day Daily Ledger History (Smooth Open & Close) */}
+      <div
+        aria-hidden={!historyOpen}
+        className={`fixed inset-0 z-50 flex justify-start transition-opacity duration-300 ease-out ${
+          historyOpen
+            ? "opacity-100 pointer-events-auto bg-ink/25 backdrop-blur-[2px]"
+            : "opacity-0 pointer-events-none bg-ink/0"
+        }`}
+      >
+        <div
+          className={`w-full max-w-sm bg-paper-elevated h-full border-r border-rule shadow-dock flex flex-col transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            historyOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          <div className="px-5 py-4 border-b border-rule flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">
+                30-Day Rolling Context Window
+              </p>
+              <h2 className="text-sm font-semibold text-ink mt-0.5">Daily Ledger Sessions</h2>
             </div>
-
-            <div className="flex-1 overflow-y-auto p-3.5 space-y-1.5">
-              {conversations.map((conv) => {
-                const selected = conv.date === activeDate;
-                return (
-                  <Link
-                    key={conv.date}
-                    href="/"
-                    onClick={() => {
-                      setActiveDate(conv.date);
-                      setHistoryOpen(false);
-                    }}
-                    className={`block p-3 rounded-lg border transition-colors ${
-                      selected
-                        ? "bg-vermilion-soft/70 border-vermilion/30"
-                        : "bg-paper border-rule hover:border-rule-strong"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-ink">{conv.label}</span>
-                      <span className="text-[11px] font-mono text-ink-muted">{conv.date}</span>
-                    </div>
-                    <p className="text-xs text-ink-secondary mt-1 line-clamp-2">{conv.summary}</p>
-                  </Link>
-                );
-              })}
-            </div>
-
-            <div className="p-4 border-t border-rule bg-paper text-[11px] text-ink-muted leading-relaxed">
-              One continuous session per business day. Records older than 30 days remain permanently in{" "}
-              <Link href="/reports" onClick={() => setHistoryOpen(false)} className="text-ink underline">
-                Reports
-              </Link>
-              .
-            </div>
+            <button
+              onClick={() => setHistoryOpen(false)}
+              className="p-1.5 rounded-md text-ink-muted hover:text-ink hover:bg-paper-subtle transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <div className="flex-1" onClick={() => setHistoryOpen(false)} />
-        </div>
-      )}
 
-      {/* Slide-Over Drawer 2: Register Summary, Guardrails & Controls */}
-      {registerOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-ink/25 backdrop-blur-[2px] animate-fade-backdrop">
-          <div className="flex-1" onClick={() => setRegisterOpen(false)} />
-          <div className="w-full max-w-sm bg-paper-elevated h-full border-l border-rule shadow-dock flex flex-col animate-drawer-right">
+          <div className="flex-1 overflow-y-auto p-3.5 space-y-1.5">
+            {conversations.map((conv) => {
+              const selected = conv.date === activeDate;
+              return (
+                <Link
+                  key={conv.date}
+                  href="/"
+                  onClick={() => {
+                    setActiveDate(conv.date);
+                    setHistoryOpen(false);
+                  }}
+                  className={`block p-3 rounded-lg border transition-colors ${
+                    selected
+                      ? "bg-vermilion-soft/70 border-vermilion/30"
+                      : "bg-paper border-rule hover:border-rule-strong"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-ink">{conv.label}</span>
+                    <span className="text-[11px] font-mono text-ink-muted">{conv.date}</span>
+                  </div>
+                  <p className="text-xs text-ink-secondary mt-1 line-clamp-2">{conv.summary}</p>
+                </Link>
+              );
+            })}
+          </div>
+
+          <div className="p-4 border-t border-rule bg-paper text-[11px] text-ink-muted leading-relaxed">
+            One continuous session per business day. Records older than 30 days remain permanently in{" "}
+            <Link href="/reports" onClick={() => setHistoryOpen(false)} className="text-ink underline">
+              Reports
+            </Link>
+            .
+          </div>
+        </div>
+        <div className="flex-1" onClick={() => setHistoryOpen(false)} />
+      </div>
+
+      {/* Slide-Over Drawer 2: Register Summary, Guardrails & Controls (Smooth Open & Close) */}
+      <div
+        aria-hidden={!registerOpen}
+        className={`fixed inset-0 z-50 flex justify-end transition-opacity duration-300 ease-out ${
+          registerOpen
+            ? "opacity-100 pointer-events-auto bg-ink/25 backdrop-blur-[2px]"
+            : "opacity-0 pointer-events-none bg-ink/0"
+        }`}
+      >
+        <div className="flex-1" onClick={() => setRegisterOpen(false)} />
+        <div
+          className={`w-full max-w-sm bg-paper-elevated h-full border-l border-rule shadow-dock flex flex-col transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            registerOpen ? "translate-x-0" : "translate-x-full"
+          }`}
+        >
             <div className="px-5 py-4 border-b border-rule flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">
@@ -644,7 +685,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </div>
-      )}
 
       {/* Interactive Modals */}
       <NewEntityPopup
