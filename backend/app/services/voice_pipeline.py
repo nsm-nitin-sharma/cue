@@ -304,40 +304,63 @@ class VoicePipelineService:
                     proposal.confidence = 0.95
 
         # 4b. Zero-Assumption Background Noise / Low-Confidence Guard
+        # If the LLM flagged ambiguity solely because multiple catalog variants match (e.g. 70g vs 250g),
+        # let _execute_operations_batch handle it so the user gets interactive product chips instead of Yes/No.
         if proposal.has_ambiguity_or_noise_conflict or proposal.confidence < 0.85:
-            clar_msg = (
-                proposal.clarification_question
-                or "Mujhe thoda confusion hai (background awaaz ya unclear intent ke kaaran). Kripya dubara confirm karein ki aap kya record karna chahte hain?"
-            )
-            if proposal.operations:
-                context_state["pending_flow"] = {
-                    "type": "confirm_proposed_ops",
-                    "operations": [op.model_dump() for op in proposal.operations],
-                    "prompt": clar_msg,
-                }
-            res = VoiceTurnResult(
-                operation_id=operation_id,
-                status="needs_clarification",
-                transcript=clean_text,
-                reply=clar_msg,
-                language=proposal.detected_language,
-                clarification={
-                    "kind": "missing_slot",
-                    "prompt": clar_msg,
-                    **(
-                        {
-                            "candidates": [
-                                {"id": "yes", "label": "Yes, confirm", "value": "Yes"},
-                                {"id": "no", "label": "No, cancel", "value": "No"},
-                            ]
-                        }
-                        if proposal.operations
-                        else {}
-                    ),
-                },
-            )
-            self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, clean_text, proposal.detected_language, stt_provider, stt_confidence, proposal.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
-            return res
+            bypass_to_batch = False
+            candidate_ops = proposal.operations
+            if not candidate_ops:
+                fb = deterministic_fallback_parse(clean_text, language)
+                if fb.operations and fb.operations[0].intent != "unknown":
+                    candidate_ops = fb.operations
+            if len(candidate_ops) == 1 and candidate_ops[0].product_query and candidate_ops[0].intent in {
+                "record_sale",
+                "inventory_receive",
+                "inventory_damage",
+                "inventory_expiry",
+                "inventory_adjust",
+                "update_product_settings",
+                "archive_product",
+            }:
+                pres_check = resolve_product_guarded(candidate_ops[0].product_query, clean_text, products, aliases)
+                if pres_check.status in {"ambiguous", "verify_alias", "not_found"}:
+                    proposal.operations = candidate_ops
+                    bypass_to_batch = True
+
+            if not bypass_to_batch:
+                clar_msg = (
+                    proposal.clarification_question
+                    or "Mujhe thoda confusion hai (background awaaz ya unclear intent ke kaaran). Kripya dubara confirm karein ki aap kya record karna chahte hain?"
+                )
+                if proposal.operations:
+                    context_state["pending_flow"] = {
+                        "type": "confirm_proposed_ops",
+                        "operations": [op.model_dump() for op in proposal.operations],
+                        "prompt": clar_msg,
+                    }
+                res = VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="needs_clarification",
+                    transcript=clean_text,
+                    reply=clar_msg,
+                    language=proposal.detected_language,
+                    clarification={
+                        "kind": "missing_slot",
+                        "prompt": clar_msg,
+                        **(
+                            {
+                                "candidates": [
+                                    {"id": "yes", "label": "Yes, confirm", "value": "Yes"},
+                                    {"id": "no", "label": "No, cancel", "value": "No"},
+                                ]
+                            }
+                            if proposal.operations
+                            else {}
+                        ),
+                    },
+                )
+                self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, clean_text, proposal.detected_language, stt_provider, stt_confidence, proposal.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
+                return res
 
         # 5. Execute parsed operations sequentially (supports single AND multi-command batch!)
         return await self._execute_operations_batch(

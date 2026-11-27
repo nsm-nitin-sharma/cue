@@ -425,3 +425,16 @@ def test_udhaar_payment_settles_sales_and_includes_in_revenue():
     assert store["customers"][0]["outstanding_balance"] == 400.0
     assert store["sales"][0]["paid_amount"] == 0.0
     assert store["sales"][0]["payment_status"] == "credit"
+
+
+def test_devanagari_variant_reply_and_repeated_disambiguation():
+    cands = [
+        {"id": "m250", "name": "Maggie Masala 250 Gram", "base_unit": "packet"},
+        {"id": "m70", "name": "Maggie Masala 70 Gram", "base_unit": "packet"},
+    ]
+    res = resolve_product_guarded("Maggie masala", "Two Maggie masala sold.", cands, [])
+    assert res.status == "ambiguous"
+    assert len(res.candidates) == 2
+
+    picked = resolve_short_variant_reply("मेगी मसाला 70 gram", cands)
+    assert picked is not None and picked["id"] == "m70"
