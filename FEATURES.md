@@ -11,7 +11,7 @@
 - [x] Author enterprise implementation blueprint ([IMPLEMENTATION_PLAN.md](file:///c:/Users/nitin/OneDrive/Documents/cue/IMPLEMENTATION_PLAN.md))
 - [x] Connect GitHub remote & push milestone commits (zero secrets ever committed)
 - [x] Verify Supabase JWT (`auth.uid()`) on every API route (`deps.py` + `security.py`); never trust client/LLM-supplied `user_id` or `business_id`
-- [~] Enforce Supabase Row Level Security (RLS) across all business tables (SQL written in `002_rls_and_security.sql`, ready to apply in Supabase SQL Editor)
+- [x] Enforce Supabase Row Level Security (RLS) across all business tables (`002_rls_and_security.sql` live in Supabase)
 - [x] **AI-as-Untrusted-Parser Sandboxing:** LLM has zero DB, SQL, shell, or task-execution authority; outputs strict JSON only
 - [x] **Pydantic v2 Schema Firewall (`extra="forbid"`):** Strict enum-locked intents, regex-checked IDs/dates, bounded quantities & array lengths
 - [x] **Zero Destructive Intents (`SecurityPolicyEngine`):** No AI/voice intents for delete, wipe, drop, or bulk reset (`POLICY_BLOCKED`)
@@ -19,7 +19,7 @@
 - [x] **3-Tier Execution Gate:** Auto-execute safe actions, clarify on doubt, confirm Tier-3 actions via cryptographic `pending_confirmations` token
 - [x] **`₹5,000` High-Value Confirmation Threshold:** Single transactions `>= ₹5,000` or cross-day reversals require explicit confirmation
 - [x] **Negative Stock Blocking:** Prevent silent negative stock by default; prompt owner for clarification
-- [~] **Atomic PostgreSQL RPCs + `SELECT ... FOR UPDATE`:** Written in `003_atomic_rpcs.sql`, ready to apply in Supabase SQL Editor
+- [x] **Atomic PostgreSQL RPCs + `SELECT ... FOR UPDATE`:** Applied in Supabase (`003_atomic_rpcs.sql`)
 - [x] **Strict Idempotency:** Client UUID `operation_id` + `payload_hash` enforced via `UNIQUE (business_id, operation_id)` and `409 Conflict` check
 - [x] **API & Upload Hardening:** Audio MIME/magic-byte validation, max file size/duration, rate limiting, CORS allowlist, security headers, PII-redacted logs
 
@@ -94,8 +94,8 @@
 
 ## 6. Core Business Ledger & Future BI Foundation
 
-- [~] Required Database Tables (`001_schema.sql` written, ready to apply in Supabase SQL Editor): `businesses`, `products`, `product_aliases`, `inventory`, `inventory_movements`, `customers`, `sales`, `sale_items`, `expenses`, `conversations`, `voice_transactions`
-- [~] Additional Enterprise Tables (`001_schema.sql`): `business_members`, `product_unit_conversions`, `customer_payments`, `conversation_messages`, `pending_confirmations`, `subscription_plans`, `business_subscriptions`, `business_insights_events`
+- [x] Required Database Tables (`001_schema.sql` live in Supabase): `businesses`, `products`, `product_aliases`, `inventory`, `inventory_movements`, `customers`, `sales`, `sale_items`, `expenses`, `conversations`, `voice_transactions`
+- [x] Additional Enterprise Tables (`001_schema.sql` live in Supabase): `business_members`, `product_unit_conversions`, `customer_payments`, `conversation_messages`, `pending_confirmations`, `subscription_plans`, `business_subscriptions`, `business_insights_events`
 - [x] Voice & UI Inventory: Receive, Deduct, Damage/Expiry, Adjustment, Low-stock alerts, Movement History
 - [x] Voice & UI Sales: Cash, Partial, and Credit (`Udhaar`) sales with itemized breakdown
 - [x] Voice & UI Customers: Customer credit ledger, payment collection, pending balance queries
