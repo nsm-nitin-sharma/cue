@@ -670,6 +670,69 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           outstandingBalance: Number(c.outstanding_balance ?? 0),
         }))
       );
+      const rawMovs = (boot.movements as Record<string, unknown>[]) ?? [];
+      setMovements(
+        rawMovs.map((m) => {
+          const pRel = m.products as { name?: string } | null;
+          return {
+            id: String(m.id),
+            productId: String(m.product_id),
+            productName: String(pRel?.name ?? "Item"),
+            movementType: (m.movement_type as InventoryMovement["movementType"]) ?? "receive",
+            quantityDelta: Number(m.quantity_delta ?? 0),
+            unit: (m.unit as BaseUnit) ?? "piece",
+            unitCost: m.unit_cost !== null && m.unit_cost !== undefined ? Number(m.unit_cost) : undefined,
+            transactionDate: String(m.transaction_date),
+            notes: String(m.notes ?? ""),
+            operationId: String(m.operation_id),
+            createdAt: String(m.created_at),
+          };
+        })
+      );
+      const rawSales = (boot.sales as Record<string, unknown>[]) ?? [];
+      setSales(
+        rawSales.map((s) => {
+          const cRel = s.customers as { name?: string } | null;
+          const itemsRaw = (s.sale_items as Record<string, unknown>[] | undefined) ?? [];
+          return {
+            id: String(s.id),
+            customerId: s.customer_id ? String(s.customer_id) : undefined,
+            customerName: String(cRel?.name ?? "Walk-in Customer"),
+            items: itemsRaw.map((it) => {
+              const pRel = it.products as { name?: string } | null;
+              return {
+                productId: String(it.product_id),
+                productName: String(pRel?.name ?? "Item"),
+                quantity: Number(it.quantity ?? 0),
+                unit: (it.unit as BaseUnit) ?? "piece",
+                unitPrice: Number(it.unit_price ?? 0),
+                lineTotal: Number(it.line_total ?? 0),
+              };
+            }),
+            totalAmount: Number(s.total_amount ?? 0),
+            paidAmount: Number(s.paid_amount ?? 0),
+            paymentStatus: (s.payment_status as Sale["paymentStatus"]) ?? "paid",
+            transactionDate: String(s.transaction_date),
+            status: (s.status as Sale["status"]) ?? "active",
+            operationId: String(s.operation_id),
+            createdAt: String(s.created_at),
+          };
+        })
+      );
+      const rawExps = (boot.expenses as Record<string, unknown>[]) ?? [];
+      setExpenses(
+        rawExps.map((ex) => ({
+          id: String(ex.id),
+          category: String(ex.category ?? "General"),
+          description: String(ex.description ?? ""),
+          amount: Number(ex.amount ?? 0),
+          paymentMethod: (ex.payment_method as Expense["paymentMethod"]) ?? "cash",
+          transactionDate: String(ex.transaction_date),
+          status: (ex.status as Expense["status"]) ?? "active",
+          operationId: String(ex.operation_id),
+          createdAt: String(ex.created_at),
+        }))
+      );
       const rawConvs = (boot.conversations as Record<string, unknown>[]) ?? [];
       const rawMsgs = (boot.messages as Record<string, unknown>[]) ?? [];
       if (rawConvs.length > 0) {
@@ -701,6 +764,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         );
       }
       setIsLiveBackend(true);
+      setStatusMessage("Live · Groq Whisper + Gemini");
     } catch {
       setIsLiveBackend(false);
     }
@@ -1569,6 +1633,19 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         receipt: res.receipts?.[0],
         clarification: res.clarification ?? undefined,
       });
+      if (res.receipts && res.receipts.length > 1) {
+        res.receipts.slice(1).forEach((slip, i) => {
+          entriesToAdd.push({
+            id: `ast-${res.operation_id}-${i + 1}`,
+            role: "assistant",
+            content: slip.title,
+            timestamp: formatTimeIST(nowIso),
+            language: res.language,
+            operationId: slip.operationId,
+            receipt: slip,
+          });
+        });
+      }
       appendEntriesToDate(todayYmd, entriesToAdd);
 
       if (res.new_product_draft) {
@@ -1632,8 +1709,20 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           const remoteRes = await sendTextCommandRemote(text, opId, language);
           await applyRemoteTurnResult(remoteRes, { includeUserTranscript: false });
           return;
-        } catch {
-          // Fall through cleanly to local simulator if server unreachable
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : "Backend processing error";
+          appendEntriesToDate(todayYmd, [
+            {
+              id: `err-${opId}`,
+              role: "assistant",
+              content: `Server error: ${errMsg}`,
+              timestamp: formatTimeIST(nowIso),
+              language,
+            },
+          ]);
+          setVoicePhase("error");
+          setStatusMessage("Backend Error");
+          return;
         }
       }
 
@@ -1793,7 +1882,13 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         }
 
         if (pendingFlow.type === "missing_slot") {
-          const val = parseIndianNumber(text);
+          let val = parseIndianNumber(text);
+          if (val === null && pendingFlow.draft.productId && /(same|wahi|purana|purane|pichla|pichle|last)/i.test(lower)) {
+            const p = products.find((item) => item.id === pendingFlow.draft.productId);
+            if (p) val = pendingFlow.draft.missingField === "purchase_price" ? p.costPrice : p.sellingPrice;
+          } else if (val === null && /(free|bonus|muft)/i.test(lower)) {
+            val = 0;
+          }
           if (val !== null) {
             const nextDraft = { ...pendingFlow.draft };
             if (nextDraft.missingField === "purchase_price" || nextDraft.missingField === "selling_price") {
@@ -2583,8 +2678,20 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           const res = await sendVoiceAudioTurn(audioBlob, opId, language);
           await applyRemoteTurnResult(res, { includeUserTranscript: true });
           return;
-        } catch {
-          // Graceful fallback to live SpeechRecognition transcript if API unreachable
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : "Audio transcription failed";
+          appendEntriesToDate(todayYmd, [
+            {
+              id: `aerr-${opId}`,
+              role: "assistant",
+              content: `Audio error: ${errMsg}`,
+              timestamp: formatTimeIST(new Date().toISOString()),
+              language,
+            },
+          ]);
+          setVoicePhase("error");
+          setStatusMessage("Audio Retry Needed");
+          return;
         }
       }
       if (fallbackTranscript && fallbackTranscript.trim()) {

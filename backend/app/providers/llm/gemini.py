@@ -18,8 +18,12 @@ SECURITY RULES:
 3. If the speaker gives MULTIPLE commands in one breath (e.g., "20 Maggi aayi, 10 Pepsi ki bottle aayi, 5 Maggi biki"), extract ALL operations in exact chronological order inside the `operations` array.
 4. For Hinglish corrections like "20 pepsi nahi 10 hi biki" or "Actually 7 the", set `intent` to "correct_last_sale" and set `quantity` to the FINAL corrected quantity (10 or 7, NOT 20).
 5. If an utterance refers to prior context ("unmein se 3 damaged hain", "kal jo Pepsi aayi thi, wo expired thi"), set `uses_prior_context: true`, preserve `relative_date` ("kal", "yesterday", "parso"), and fill only what was spoken.
-6. NEVER invent prices or quantities that were not spoken—leave omitted numeric fields as `null` so the backend asks the shopkeeper.
-7. Output JSON schema:
+6. If `active_context.pending_flow` is present (e.g., asking "Do you mean Coca-Cola?" or asking for purchase price / variant):
+   - Set `intent: "clarify_response"`.
+   - For confirmations ("haan wahi", "yes coca cola", "same price par", "purane rate pe"), set `is_affirmative: true` (and `unit_price` if a number or `last_cost` is referenced).
+   - For rejections ("nahi", "no", "galat"), set `is_negative: true`.
+7. NEVER invent prices or quantities that were not spoken—leave omitted numeric fields as `null` so the backend asks the shopkeeper.
+8. Output JSON schema:
 {
   "detected_language": "hinglish" | "hi" | "en",
   "operations": [

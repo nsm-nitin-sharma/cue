@@ -1,16 +1,23 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone, tzinfo
 import re
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+_IST_FALLBACK = timezone(timedelta(hours=5, minutes=30))
+
+
+def _resolve_tz(timezone_name: str) -> tzinfo:
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return _IST_FALLBACK
 
 
 def get_business_today(timezone_name: str = "Asia/Kolkata") -> date:
-    tz = ZoneInfo(timezone_name)
-    return datetime.now(tz).date()
+    return datetime.now(_resolve_tz(timezone_name)).date()
 
 
 def get_business_now_iso(timezone_name: str = "Asia/Kolkata") -> str:
-    tz = ZoneInfo(timezone_name)
-    return datetime.now(tz).isoformat()
+    return datetime.now(_resolve_tz(timezone_name)).isoformat()
 
 
 def check_memory_window_days(

@@ -421,6 +421,38 @@ class VoicePipelineService:
             val = parse_indian_number(reply_text)
             draft = dict(pending_flow["draft"])
             missing_field = pending_flow.get("missing_field")
+            prod = next((p for p in products if str(p["id"]) == str(draft.get("product_id"))), None)
+
+            # Natural Hinglish/English references for "same price par", "purane rate pe", "wahi", "free"
+            if val is None and missing_field in {"purchase_price", "selling_price"}:
+                if any(w in lower for w in ("same", "wahi", "purana", "purane", "pichla", "pichle", "last")):
+                    if prod:
+                        val = float(
+                            prod.get("default_cost_price" if missing_field == "purchase_price" else "default_selling_price")
+                            or 0
+                        )
+                elif any(w in lower for w in ("free", "bonus", "muft")):
+                    val = 0.0
+
+            # Agentic LLM fallback for nuanced Hinglish pending replies
+            if val is None and missing_field in {"purchase_price", "selling_price", "quantity"}:
+                llm = get_llm_provider()
+                proposal = await llm.parse_utterance(
+                    utterance=reply_text,
+                    language_hint=language,
+                    context_summary={"pending_flow": pending_flow, "product": prod},
+                    catalog_hints=[{"name": prod["name"], "last_cost": prod.get("default_cost_price")}] if prod else [],
+                    customer_hints=[],
+                )
+                if proposal.operations:
+                    op0 = proposal.operations[0]
+                    if missing_field in {"purchase_price", "selling_price"}:
+                        val = op0.unit_price if op0.unit_price is not None else op0.total_amount
+                        if val is None and op0.is_affirmative and prod:
+                            val = float(prod.get("default_cost_price") or 0)
+                    elif missing_field == "quantity":
+                        val = op0.quantity
+
             if missing_field in {"purchase_price", "selling_price"} and val is not None:
                 draft["unit_price"] = val
                 context_state.pop("pending_flow", None)

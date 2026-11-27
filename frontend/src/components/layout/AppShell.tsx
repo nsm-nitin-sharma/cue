@@ -58,6 +58,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     pendingConfirmation,
     confirmPendingHighValue,
     cancelPendingHighValue,
+    isLiveBackend,
   } = useCueWorkspace();
 
   const tierLabel =
@@ -127,8 +128,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             type="button"
             onClick={() => setRegisterOpen(true)}
             className="inline-flex items-center gap-2.5 px-3 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
+            title={isLiveBackend ? "Connected to Supabase + Groq Whisper + Gemini" : "Local Preview Mode — Sign in at /login for Live AI"}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-sage" />
+            <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? "bg-sage" : "bg-ochre"}`} />
+            <span className="hidden lg:inline text-[10px] font-mono uppercase tracking-wider text-ink-muted">
+              {isLiveBackend ? "AI Live" : "Preview"}
+            </span>
             <span className="font-mono tabular-nums font-semibold text-ink">
               {formatINR(todayStats.salesTotal)}
             </span>
