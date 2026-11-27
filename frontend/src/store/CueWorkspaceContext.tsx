@@ -1495,6 +1495,60 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           }
         }
 
+        if (pendingFlow.type === "disambiguate_product") {
+          const matchedCand = pendingFlow.candidates.find((c) => {
+            const cLower = c.name.toLowerCase();
+            const normalizedInput = lower.replace(/\s+/g, "");
+            const normalizedName = cLower.replace(/\s+/g, "");
+            return (
+              normalizedName.includes(normalizedInput) ||
+              c.aliases.some((a) => lower.includes(a) || a.replace(/\s+/g, "").includes(normalizedInput)) ||
+              (/(500|chhoti|chotti|small)/i.test(lower) && cLower.includes("500")) ||
+              (/(2l|2 l|badi|baddi|large|1l|1 l)/i.test(lower) && cLower.includes("2l"))
+            );
+          });
+          if (matchedCand) {
+            const draft = pendingFlow.draft;
+            setPendingFlow(null);
+            resolveMissingSlotAndExecute({
+              ...draft,
+              productId: matchedCand.id,
+              productName: matchedCand.name,
+              unit: matchedCand.baseUnit,
+              missingField: draft.kind === "receive" ? "purchase_price" : "selling_price",
+            });
+            return;
+          }
+        }
+
+        if (pendingFlow.type === "disambiguate_customer") {
+          const matchedCust = pendingFlow.candidates.find(
+            (c) =>
+              c.name
+                .toLowerCase()
+                .split(" ")
+                .some((part) => part.length > 2 && lower.includes(part)) ||
+              (c.areaNote && lower.includes(c.areaNote.toLowerCase())) ||
+              c.phone.slice(-4).includes(lower)
+          );
+          if (matchedCust) {
+            const amt = pendingFlow.draft.amount ?? 0;
+            setPendingFlow(null);
+            if (amt >= 5000) {
+              requestHighValueConfirm({
+                operationId: opId,
+                token: `tok-${opId}`,
+                title: `High-Value Udhaar · ${matchedCust.name}`,
+                description: `${matchedCust.areaNote ?? ""} · ${matchedCust.phone}`,
+                amountINR: amt,
+                impactSummary: `Outstanding balance ${formatINR(matchedCust.outstandingBalance)} → ${formatINR(matchedCust.outstandingBalance + amt)}`,
+                payload: { kind: "direct_udhaar", customerId: matchedCust.id, amount: amt },
+              });
+              return;
+            }
+          }
+        }
+
         if (pendingFlow.type === "missing_slot") {
           const val = parseIndianNumber(text);
           if (val !== null) {
@@ -1505,6 +1559,20 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
               nextDraft.quantity = val;
             }
             setPendingFlow(null);
+            if (nextDraft.kind === "expiry" && nextDraft.productId) {
+              const prod = products.find((p) => p.id === nextDraft.productId);
+              if (prod && nextDraft.quantity) {
+                commitDamageOrExpiry({
+                  product: prod,
+                  quantity: nextDraft.quantity,
+                  kind: "expiry",
+                  transactionDate: nextDraft.transactionDate,
+                  linkedNote: `Linked to ${nextDraft.transactionDate} batch`,
+                  operationId: opId,
+                });
+                return;
+              }
+            }
             resolveMissingSlotAndExecute(nextDraft);
             return;
           }

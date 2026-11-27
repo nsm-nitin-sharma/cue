@@ -67,8 +67,8 @@
 - [ ] **Verified Alias Learning:** Saying *"Coke"* when DB has *"Coca-Cola"* asks *"Do you mean Coca-Cola?"*:
   - [ ] On **Yes**: Executes transaction atomically **and saves `"Coke"` as a verified alias** in `product_aliases`
   - [ ] On **No**: Aborts candidate and asks for further clarification
-- [ ] Multi-product disambiguation (*"Pepsi"* → *"Pepsi 500ml"* vs *"Pepsi 2L"* with selectable chips)
-- [ ] Duplicate customer disambiguation (using phone last-4 digits / area note / balance)
+- [ ] Multi-product disambiguation (*"20 Pepsi bik gayi"* → *"Pepsi 500ml ya Pepsi 2L?"* → replying just *"500ml"* by voice or tap merges `"500ml"` with the held quantity `20` and executes without repeating the full sentence)
+- [ ] Duplicate customer disambiguation (using phone last-4 digits / area note / balance, resolvable by voice reply like *"Gupta"* or chip tap)
 - [ ] **Brand-New Product / Customer Creation (Voice + Pop-Up):**
   - [ ] Cue asks *"Kya naya product add karun?"* AND displays an interactive confirmation pop-up on screen
   - [ ] Confirming via **either voice or screen button** closes the pop-up, creates the item, and commits the transaction atomically
