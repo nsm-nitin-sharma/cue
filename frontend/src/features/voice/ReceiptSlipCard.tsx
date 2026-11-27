@@ -17,12 +17,12 @@ export function ReceiptSlipCard({
 
   const accentHex =
     receipt.status === "blocked" || receipt.kind === "damage" || receipt.kind === "expiry"
-      ? "#B83232"
+      ? "#B91C1C"
       : receipt.status === "pending_sync" || receipt.status === "corrected"
-        ? "#B46914"
+        ? "#B45309"
         : receipt.status === "undone"
-          ? "#8C857B"
-          : "#1E6B52";
+          ? "#667085"
+          : "#15803D";
 
   const pillTone =
     receipt.status === "blocked"
@@ -42,11 +42,11 @@ export function ReceiptSlipCard({
           ? "Reversed"
           : receipt.status === "blocked"
             ? "Blocked"
-            : "Saved";
+            : "Verified";
 
   return (
     <div
-      className="receipt-slip rounded-2xl p-4 pl-5 mt-3 max-w-2xl animate-slip-in"
+      className="receipt-slip rounded-xl p-4 pl-5 mt-3 max-w-2xl animate-slip-in"
       style={{ "--slip-accent": accentHex } as React.CSSProperties}
     >
       <div className="flex items-start justify-between gap-3">
@@ -66,13 +66,11 @@ export function ReceiptSlipCard({
           <p className="text-[11px] text-ink-muted mt-0.5">{receipt.subtitle}</p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <StatusPill tone={pillTone}>{statusLabel}</StatusPill>
-        </div>
+        <StatusPill tone={pillTone}>{statusLabel}</StatusPill>
       </div>
 
       {receipt.lines.length > 0 && (
-        <div className="mt-3 pt-2.5 border-t border-dashed border-rule space-y-1.5">
+        <div className="mt-3 pt-2.5 border-t border-rule space-y-1.5">
           {receipt.lines.map((line, idx) => {
             const valTone =
               line.tone === "sage"
@@ -94,8 +92,8 @@ export function ReceiptSlipCard({
 
       {receipt.amountINR !== undefined && (
         <div className="mt-2.5 pt-2.5 border-t border-rule flex items-baseline justify-between">
-          <span className="text-[11px] uppercase tracking-wider text-ink-muted font-medium">
-            Total Value
+          <span className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">
+            Net Amount
           </span>
           <span className="text-base font-mono font-semibold tabular-nums text-ink">
             {formatINR(receipt.amountINR)}
@@ -103,19 +101,19 @@ export function ReceiptSlipCard({
         </div>
       )}
 
-      <div className="mt-3 pt-2 flex items-center justify-between text-[11px] text-ink-muted">
+      <div className="mt-3 pt-2 border-t border-rule/60 flex items-center justify-between text-[11px] text-ink-muted">
         <div className="flex items-center gap-2 font-mono">
           <span>{formatShortOp(receipt.operationId)}</span>
           <span>·</span>
           <span>{receipt.transactionDate}</span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {receipt.auditTrail && receipt.auditTrail.length > 0 && (
             <button
               type="button"
               onClick={() => setShowAudit((v) => !v)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-paper-subtle text-ink-secondary transition-colors"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md hover:bg-paper-subtle text-ink-secondary transition-colors"
             >
               <History className="w-3 h-3" />
               Audit ({receipt.auditTrail.length})
@@ -125,10 +123,10 @@ export function ReceiptSlipCard({
             <button
               type="button"
               onClick={() => onUndo(receipt.operationId)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rule hover:border-rule-strong hover:bg-paper-subtle text-ink-secondary hover:text-ink transition-colors"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-rule hover:border-rule-strong hover:bg-paper-subtle text-ink-secondary hover:text-ink transition-colors"
             >
               <RotateCcw className="w-3 h-3" />
-              Undo
+              Reverse
             </button>
           )}
         </div>

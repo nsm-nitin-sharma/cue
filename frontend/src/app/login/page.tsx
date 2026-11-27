@@ -72,11 +72,11 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-paper flex flex-col justify-between p-6 sm:p-10">
       <header className="max-w-5xl w-full mx-auto flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-vermilion text-white flex items-center justify-center font-semibold text-sm">
+        <Link href="/" className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-md bg-ink text-white flex items-center justify-center font-mono font-semibold text-xs">
             C
           </div>
-          <span className="font-semibold text-base tracking-tight text-ink">Cue</span>
+          <span className="font-semibold text-sm tracking-tight text-ink">Cue</span>
         </Link>
         <Link
           href="/"
@@ -88,7 +88,7 @@ export default function LoginPage() {
       </header>
 
       <main className="max-w-md w-full mx-auto my-8">
-        <div className="bg-paper-elevated border border-rule-strong rounded-3xl shadow-dock p-7 sm:p-8">
+        <div className="bg-paper-elevated border border-rule-strong rounded-xl shadow-dock p-7 sm:p-8">
           <div className="mb-6">
             <p className="text-[11px] font-mono uppercase tracking-wider text-vermilion">
               Store Owner Access

@@ -78,11 +78,11 @@ export default function OnboardingPage() {
     <div className="min-h-screen bg-paper py-8 px-4 sm:px-8">
       <div className="max-w-5xl mx-auto space-y-8">
         <header className="flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-vermilion text-white flex items-center justify-center font-semibold text-sm">
+          <Link href="/" className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-md bg-ink text-white flex items-center justify-center font-mono font-semibold text-xs">
               C
             </div>
-            <span className="font-semibold text-base tracking-tight text-ink">Cue</span>
+            <span className="font-semibold text-sm tracking-tight text-ink">Cue</span>
           </Link>
           <Link
             href="/"
@@ -115,10 +115,10 @@ export default function OnboardingPage() {
                 key={plan.code}
                 type="button"
                 onClick={() => setSelectedTier(plan.code)}
-                className={`text-left p-6 rounded-3xl border transition-all flex flex-col justify-between ${
+                className={`text-left p-6 rounded-xl border transition-all flex flex-col justify-between ${
                   active
                     ? "bg-paper-elevated border-vermilion shadow-dock ring-2 ring-vermilion/15"
-                    : "bg-paper-elevated/80 border-rule hover:border-rule-strong"
+                    : "bg-paper-elevated/90 border-rule hover:border-rule-strong"
                 }`}
               >
                 <div>
@@ -155,7 +155,7 @@ export default function OnboardingPage() {
         {/* Store Profile Form */}
         <form
           onSubmit={handleActivate}
-          className="bg-paper-elevated border border-rule-strong rounded-3xl p-6 sm:p-7 shadow-slip"
+          className="bg-paper-elevated border border-rule-strong rounded-xl p-6 sm:p-7 shadow-slip"
         >
           <div className="flex items-center gap-2.5 mb-5">
             <div className="w-8 h-8 rounded-xl bg-paper-subtle border border-rule flex items-center justify-center text-ink">
@@ -216,7 +216,7 @@ export default function OnboardingPage() {
             </p>
             <button
               type="submit"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-vermilion hover:bg-vermilion-hover text-white transition-colors"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-ink hover:bg-vermilion text-white transition-colors"
             >
               Activate &amp; Open Voice Desk
               <ArrowRight className="w-4 h-4" />

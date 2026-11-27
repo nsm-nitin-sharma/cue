@@ -11,6 +11,7 @@ import { speakReply } from "@/lib/tts";
 
 export default function VoiceDeskPage() {
   const {
+    store,
     activeConversation,
     activeDate,
     setActiveDate,
@@ -33,41 +34,41 @@ export default function VoiceDeskPage() {
   return (
     <AppShell>
       <div className="flex-1 flex flex-col min-h-0 justify-between">
-        {/* Quiet History Stream (Centered Editorial Column, Zero Clutter) */}
-        <div className="flex-1 overflow-y-auto px-4 sm:px-8 pt-6 pb-4">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-8 pt-7 pb-4">
           <div className="max-w-2xl mx-auto">
             {activeDate !== todayDate && todayDate && (
               <div className="mb-6 pb-3 border-b border-rule flex items-center justify-between">
                 <p className="text-xs text-ink-secondary">
-                  Viewing <span className="font-medium text-ink">{activeConversation.label}</span> ({activeConversation.date})
+                  Session: <span className="font-semibold text-ink">{activeConversation.label}</span>{" "}
+                  <span className="font-mono text-ink-muted">({activeConversation.date})</span>
                 </p>
                 <button
                   type="button"
                   onClick={() => setActiveDate(todayDate)}
                   className="text-xs font-medium text-vermilion hover:underline"
                 >
-                  Back to Today
+                  Return to Today
                 </button>
               </div>
             )}
 
-            {/* Serene Empty Hero When Day Has Few/No Turns */}
+            {/* Authoritative Quiet Studio Header */}
             {entries.length <= 2 && activeDate === todayDate && (
-              <div className="mb-10 pt-4 sm:pt-8 text-center">
-                <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-ink-muted">
-                  Voice-First Business OS
+              <div className="mb-9 pt-2 sm:pt-5 border-b border-rule pb-6">
+                <p className="text-[11px] font-mono uppercase tracking-[0.14em] text-ink-muted">
+                  {store.name} · {activeConversation.date} · IST
                 </p>
-                <h1 className="text-2xl sm:text-3xl font-medium tracking-tight text-ink mt-2">
-                  Just speak your business.
+                <h1 className="text-2xl sm:text-[26px] font-semibold tracking-tight text-ink mt-1.5">
+                  Voice Operations Console
                 </h1>
-                <p className="text-sm text-ink-secondary mt-2 max-w-md mx-auto leading-relaxed">
-                  Record stock, sales, expenses, or ask about udhaar in Hindi, Hinglish, or English.
+                <p className="text-sm text-ink-secondary mt-1 leading-relaxed">
+                  Speak naturally in Hindi, Hinglish, or English to record inventory, sales, expenses, or verify customer balances.
                 </p>
               </div>
             )}
 
-            {/* Editorial Dialogue & Tactile Slips */}
-            <div className="space-y-7">
+            {/* Structured Conversational Ledger */}
+            <div className="space-y-6">
               {entries.map((entry, idx) => {
                 const isLatest = idx === entries.length - 1;
                 const isUser = entry.role === "user";
@@ -76,10 +77,10 @@ export default function VoiceDeskPage() {
                   return (
                     <div
                       key={entry.id}
-                      className="flex items-baseline justify-between gap-4 border-l-2 border-vermilion/40 pl-4 py-0.5 animate-slip-in"
+                      className="flex items-baseline justify-between gap-4 border-l-2 border-ink pl-3.5 py-0.5 animate-slip-in"
                     >
-                      <p className="text-[15px] sm:text-base font-medium text-ink leading-snug">
-                        &ldquo;{entry.content}&rdquo;
+                      <p className="text-sm sm:text-[15px] font-medium text-ink leading-snug">
+                        {entry.content}
                       </p>
                       <span className="text-[10px] font-mono text-ink-muted shrink-0">
                         {entry.timestamp}
@@ -95,8 +96,10 @@ export default function VoiceDeskPage() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <p
-                        className={`leading-relaxed text-ink-secondary ${
-                          isLatest ? "text-base sm:text-[17px] text-ink font-normal" : "text-sm"
+                        className={`leading-relaxed ${
+                          isLatest
+                            ? "text-[15px] sm:text-base text-ink font-normal"
+                            : "text-sm text-ink-secondary"
                         }`}
                       >
                         {entry.content}
@@ -104,7 +107,7 @@ export default function VoiceDeskPage() {
                       <button
                         type="button"
                         onClick={() => speakReply(entry.content, language, true || ttsEnabled)}
-                        className="p-1.5 rounded-full text-ink-muted hover:text-vermilion hover:bg-paper-elevated transition-colors shrink-0"
+                        className="p-1.5 rounded-md text-ink-muted hover:text-vermilion hover:bg-paper-elevated transition-colors shrink-0"
                         title="Replay voice"
                         aria-label="Replay spoken response"
                       >
@@ -112,15 +115,14 @@ export default function VoiceDeskPage() {
                       </button>
                     </div>
 
-                    {/* Focused Clarification Gestures ("Do you mean Coca-Cola?", Price, Variants) */}
                     {entry.clarification?.candidates && entry.clarification.candidates.length > 0 && (
-                      <div className="mt-3.5 flex flex-wrap gap-2">
+                      <div className="mt-3 flex flex-wrap gap-2">
                         {entry.clarification.candidates.map((cand) => (
                           <button
                             key={cand.id}
                             type="button"
                             onClick={() => selectClarificationCandidate(cand)}
-                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink hover:border-vermilion hover:bg-vermilion-soft/45 transition-all shadow-sm"
+                            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium bg-paper-elevated border border-rule-strong text-ink hover:border-vermilion hover:bg-vermilion-soft transition-all shadow-sm"
                           >
                             <span>{cand.label}</span>
                             {cand.meta && (
@@ -133,20 +135,18 @@ export default function VoiceDeskPage() {
                       </div>
                     )}
 
-                    {/* > 30 Days Memory Boundary Link */}
                     {entry.clarification?.kind === "memory_boundary" && (
                       <div className="mt-3">
                         <Link
                           href="/reports"
-                          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink hover:border-ink transition-colors"
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium bg-paper-elevated border border-rule-strong text-ink hover:border-ink transition-colors"
                         >
-                          Open Permanent Reports
+                          Open Ledger Archive
                           <ArrowRight className="w-3.5 h-3.5" />
                         </Link>
                       </div>
                     )}
 
-                    {/* Tactile Paper-Slip Receipt Card */}
                     {entry.receipt && (
                       <ReceiptSlipCard receipt={entry.receipt} onUndo={undoReceipt} />
                     )}
@@ -159,7 +159,6 @@ export default function VoiceDeskPage() {
           </div>
         </div>
 
-        {/* Hero Sculptural Living Acoustic Orb (Anchored Bottom-Center) */}
         <LivingAcousticOrb />
       </div>
     </AppShell>

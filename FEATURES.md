@@ -113,7 +113,7 @@
 
 ## 8. Bespoke Minimal UI/UX ("Warm Ledger & Studio Voice")
 
-- [x] Desktop-first, responsive warm light theme (`#FAF8F5` paper canvas, `#171614` ink, `#D95D39` living voice accent, tabular monospace numerals)
+- [x] Desktop-first, responsive enterprise light theme (`#F7F8FA` porcelain canvas, `#0F172A` obsidian ink, `#1D4ED8` precision cobalt voice accent, tabular monospace numerals)
 - [x] **Voice Desk (Home):** Prominent **Living Mic Orb** (`Space` / `Ctrl+M` shortcut), live waveform, clear status states (`Listening`, `Transcribing`, `Validating`, `Saved`, `Needs Clarification`, `Confirm Required`, `Pending Sync`, `Error`)
 - [x] Tactile **Paper-Slip Receipt Cards** in the conversation stream with quick `Undo` / `Edit` / `Confirm` controls
 - [x] **30-Day Daily Chat Sidebar** (`Today`, `Yesterday`, ..., past 30 days)

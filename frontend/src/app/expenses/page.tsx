@@ -56,7 +56,7 @@ export default function ExpensesPage() {
               <button
                 type="button"
                 onClick={() => setShowAdd((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-medium bg-vermilion hover:bg-vermilion-hover text-white transition-colors"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg text-xs font-medium bg-ink hover:bg-vermilion text-white transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Add Expense

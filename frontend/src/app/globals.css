@@ -4,15 +4,15 @@
 
 @layer base {
   html {
-    background-color: #F8F6F1;
-    color: #141311;
+    background-color: #F7F8FA;
+    color: #0F172A;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   body {
-    background-color: #F8F6F1;
-    color: #141311;
+    background-color: #F7F8FA;
+    color: #0F172A;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 }
@@ -21,26 +21,25 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Tactile ledger slip with hairline precision */
+/* Institutional ledger receipt card */
 .receipt-slip {
   position: relative;
   background: #FFFFFF;
-  border: 1px solid #E8E2D7;
-  box-shadow: 0 1px 2px rgba(20, 19, 17, 0.03), 0 8px 24px rgba(20, 19, 17, 0.04);
+  border: 1px solid #E4E7EC;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.03);
 }
 
 .receipt-slip::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 2.5px;
-  border-radius: 0 3px 3px 0;
-  background: var(--slip-accent, #1B6B50);
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 12px 0 0 12px;
+  background: var(--slip-accent, #15803D);
 }
 
-/* Hide scrollbars cleanly where horizontal chips or drawers scroll */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -59,10 +58,10 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #DDD7CB;
+  background: #D0D5DD;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #C8C0B4;
+  background: #98A2B3;
 }

@@ -40,7 +40,7 @@ export default function ReportsPage() {
           {/* Business Day Replay Card */}
           <form
             onSubmit={handleRunReplay}
-            className="bg-paper-elevated border border-rule-strong rounded-3xl p-6 shadow-slip space-y-4"
+            className="bg-paper-elevated border border-rule-strong rounded-xl p-6 shadow-slip space-y-4"
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -65,7 +65,7 @@ export default function ReportsPage() {
             <div className="flex justify-end">
               <button
                 type="submit"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium bg-vermilion hover:bg-vermilion-hover text-white transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium bg-ink hover:bg-vermilion text-white transition-colors"
               >
                 Process Day Replay in Voice Desk
                 <ArrowRight className="w-3.5 h-3.5" />
