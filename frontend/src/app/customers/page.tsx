@@ -78,7 +78,7 @@ export default function CustomersPage() {
             )}
             {customers.map((c) => {
               const customerUdhaar = sales.filter(
-                (s) => s.customerId === c.id && s.status !== "voided" && s.paymentStatus !== "paid"
+                (s) => s.customerId === c.id && s.status === "active" && s.paymentStatus !== "paid"
               );
               return (
                 <div

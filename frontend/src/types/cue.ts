@@ -88,6 +88,20 @@ export interface Expense {
   createdAt: string;
 }
 
+export interface CustomerPayment {
+  id: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  paymentMethod: "cash" | "upi" | "bank";
+  transactionDate: string;
+  status: "active" | "corrected" | "voided";
+  operationId: string;
+  priorCollected: number;
+  notes?: string;
+  createdAt: string;
+}
+
 export interface AuditEntry {
   timestamp: string;
   action: string;

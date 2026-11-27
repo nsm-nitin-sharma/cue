@@ -5,7 +5,7 @@ import { RotateCcw } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Amount, StatusPill } from "@/components/ui/LedgerPrimitives";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
-import { formatShortOp, getTodayIST, isDateInPeriod, type TimePeriodFilter } from "@/lib/format";
+import { formatINR, formatShortOp, getTodayIST, isDateInPeriod, type TimePeriodFilter } from "@/lib/format";
 
 const SALES_FILTERS: { code: TimePeriodFilter; label: string }[] = [
   { code: "today", label: "Today" },
@@ -16,7 +16,7 @@ const SALES_FILTERS: { code: TimePeriodFilter; label: string }[] = [
 ];
 
 export default function SalesPage() {
-  const { sales, products, undoReceipt } = useCueWorkspace();
+  const { sales, customerPayments, products, undoReceipt } = useCueWorkspace();
   const [period, setPeriod] = useState<TimePeriodFilter>("today");
   const todayYmd = useMemo(() => getTodayIST(), []);
 
@@ -31,11 +31,23 @@ export default function SalesPage() {
     [period, sales, todayYmd]
   );
 
+  // Today's collections against earlier-date Udhaar bills (in wider periods those older bills already appear in filteredSales)
+  const todayPriorCollections = useMemo(
+    () =>
+      period === "today"
+        ? customerPayments.filter(
+            (p) => p.status === "active" && p.transactionDate === todayYmd && p.priorCollected > 0
+          )
+        : [],
+    [customerPayments, period, todayYmd]
+  );
+
   const summary = useMemo(() => {
     const active = filteredSales.filter((s) => s.status === "active");
-    const totalBilled = active.reduce((acc, s) => acc + s.totalAmount, 0);
-    const revenueCollected = active.reduce((acc, s) => acc + s.paidAmount, 0);
-    const udhaarPending = Math.max(0, totalBilled - revenueCollected);
+    const priorExtra = todayPriorCollections.reduce((acc, p) => acc + p.priorCollected, 0);
+    const totalBilled = active.reduce((acc, s) => acc + s.totalAmount, 0) + priorExtra;
+    const revenueCollected = active.reduce((acc, s) => acc + s.paidAmount, 0) + priorExtra;
+    const udhaarPending = Math.max(0, active.reduce((acc, s) => acc + (s.totalAmount - s.paidAmount), 0));
     const profit = active.reduce((acc, s) => {
       const sProfit = s.items.reduce((pAcc, it) => {
         const cost = costByProductId.get(it.productId);
@@ -44,8 +56,14 @@ export default function SalesPage() {
       }, 0);
       return acc + sProfit;
     }, 0);
-    return { count: active.length, totalBilled, revenueCollected, udhaarPending, profit };
-  }, [costByProductId, filteredSales]);
+    return {
+      count: active.length + todayPriorCollections.length,
+      totalBilled,
+      revenueCollected,
+      udhaarPending,
+      profit,
+    };
+  }, [costByProductId, filteredSales, todayPriorCollections]);
 
   return (
     <AppShell>
@@ -117,13 +135,49 @@ export default function SalesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-rule text-sm">
-                  {filteredSales.length === 0 && (
+                  {filteredSales.length === 0 && todayPriorCollections.length === 0 && (
                     <tr>
                       <td colSpan={8} className="py-10 px-4 text-center text-xs text-ink-muted">
                         No sales recorded for this period yet.
                       </td>
                     </tr>
                   )}
+                  {todayPriorCollections.map((p) => (
+                    <tr key={`pay-${p.id}`} className="hover:bg-paper/60 transition-colors">
+                      <td className="py-3.5 px-4">
+                        <p className="font-mono text-xs text-ink">{p.transactionDate}</p>
+                        <p className="font-mono text-[10px] text-ink-muted">{formatShortOp(p.operationId)}</p>
+                      </td>
+                      <td className="py-3.5 px-4 font-medium text-ink">{p.customerName}</td>
+                      <td className="py-3.5 px-4 text-xs text-ink-secondary">
+                        Udhaar payment collected (earlier due)
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <StatusPill tone="sage">
+                          {p.paymentMethod === "upi" ? "Online" : p.paymentMethod === "bank" ? "Bank" : "Cash"}
+                        </StatusPill>
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <Amount value={p.priorCollected} className="font-semibold text-ink" />
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <Amount value={0} className="text-xs font-medium text-ink-muted" />
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <StatusPill tone="sage">settled</StatusPill>
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => undoReceipt(p.operationId)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rule text-xs text-ink-secondary hover:text-ink hover:bg-paper-subtle"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          Reverse
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                   {filteredSales.map((s) => {
                     const rowProfit = s.items.reduce((pAcc, it) => {
                       const cost = costByProductId.get(it.productId);
@@ -139,15 +193,21 @@ export default function SalesPage() {
                         <td className="py-3.5 px-4 text-xs text-ink-secondary">
                           {s.items.length > 0
                             ? s.items.map((it) => `${it.quantity} ${it.unit} ${it.productName}`).join(", ")
-                            : "Direct credit entry"}
+                            : s.notes?.includes("Udhaar settlement")
+                              ? "Udhaar payment settled"
+                              : "Direct credit entry"}
                         </td>
                         <td className="py-3.5 px-4">
                           <StatusPill tone={s.paymentStatus === "paid" ? "sage" : "ochre"}>
                             {s.paymentStatus === "credit"
                               ? "Udhaar"
-                              : s.notes?.includes("[ONLINE]")
-                                ? "Online"
-                                : "Cash"}
+                              : s.paymentStatus === "partial"
+                                ? `Partial (${formatINR(s.paidAmount)}/${formatINR(s.totalAmount)})`
+                                : s.notes?.includes("[ONLINE]")
+                                  ? "Online"
+                                  : s.notes?.includes("[BANK]")
+                                    ? "Bank"
+                                    : "Cash"}
                           </StatusPill>
                         </td>
                         <td className="py-3.5 px-4 text-right">

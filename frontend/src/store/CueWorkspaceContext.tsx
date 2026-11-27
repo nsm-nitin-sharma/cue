@@ -33,6 +33,7 @@ import type {
   ChatEntry,
   ClarificationCandidate,
   Customer,
+  CustomerPayment,
   DayConversation,
   Expense,
   InventoryMovement,
@@ -95,6 +96,7 @@ interface CueWorkspaceContextValue {
   customers: Customer[];
   sales: Sale[];
   expenses: Expense[];
+  customerPayments: CustomerPayment[];
   conversations: DayConversation[];
   activeDate: string;
   setActiveDate: (date: string) => void;
@@ -368,6 +370,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   const [movements, setMovements] = useState<InventoryMovement[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>([]);
 
   const [conversations, setConversations] = useState<DayConversation[]>([
     {
@@ -530,6 +533,27 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           operationId: String(ex.operation_id),
           createdAt: String(ex.created_at),
         }))
+      );
+      const rawPays = (boot.customer_payments as Record<string, unknown>[]) ?? [];
+      setCustomerPayments(
+        rawPays.map((py) => {
+          const cRel = py.customers as { name?: string } | null;
+          const noteStr = String(py.notes ?? "");
+          const priorMatch = noteStr.match(/\[PRIOR_COLLECTED:([0-9.]+)\]/);
+          return {
+            id: String(py.id),
+            customerId: String(py.customer_id),
+            customerName: String(cRel?.name ?? "Customer"),
+            amount: Number(py.amount ?? 0),
+            paymentMethod: (py.payment_method as CustomerPayment["paymentMethod"]) ?? "cash",
+            transactionDate: String(py.transaction_date),
+            status: (py.status as CustomerPayment["status"]) ?? "active",
+            operationId: String(py.operation_id),
+            priorCollected: priorMatch ? Number(priorMatch[1]) : 0,
+            notes: noteStr,
+            createdAt: String(py.created_at),
+          };
+        })
       );
       const rawConvs = (boot.conversations as Record<string, unknown>[]) ?? [];
       const rawMsgs = (boot.messages as Record<string, unknown>[]) ?? [];
@@ -2654,18 +2678,76 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           });
         return;
       }
+      const opId = makeOperationId();
+      const cust = customers.find((c) => c.id === customerId);
+      const methodTag = method === "upi" ? "ONLINE" : method === "bank" ? "BANK" : "CASH";
       setCustomers((prev) =>
         prev.map((c) =>
           c.id === customerId ? { ...c, outstandingBalance: Math.max(0, c.outstandingBalance - amount) } : c
         )
       );
-      const cust = customers.find((c) => c.id === customerId);
+      let rem = amount;
+      let priorExtra = 0;
+      setSales((prev) => {
+        const next = [...prev].sort((a, b) => a.transactionDate.localeCompare(b.transactionDate));
+        const updated = next.map((s) => {
+          if (rem <= 0 || s.customerId !== customerId || s.status !== "active" || s.paymentStatus === "paid") {
+            return s;
+          }
+          const due = Math.max(0, s.totalAmount - s.paidAmount);
+          if (due <= 0) return s;
+          const applyAmt = Math.min(rem, due);
+          const newPaid = Number((s.paidAmount + applyAmt).toFixed(2));
+          rem = Number((rem - applyAmt).toFixed(2));
+          if (s.transactionDate !== todayYmd) {
+            priorExtra = Number((priorExtra + applyAmt).toFixed(2));
+          }
+          return {
+            ...s,
+            paidAmount: newPaid,
+            paymentStatus: (newPaid >= s.totalAmount - 0.009 ? "paid" : "partial") as Sale["paymentStatus"],
+            notes: `[${methodTag}] Udhaar paid`,
+          };
+        });
+        if (rem > 0.01) {
+          updated.unshift({
+            id: `sale-${opId}`,
+            customerId,
+            customerName: cust?.name ?? "Customer",
+            items: [],
+            totalAmount: rem,
+            paidAmount: rem,
+            paymentStatus: "paid",
+            transactionDate: todayYmd,
+            status: "active",
+            operationId: opId,
+            notes: `[${methodTag}] Udhaar settlement`,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        return updated;
+      });
+      setCustomerPayments((prev) => [
+        {
+          id: `pay-${opId}`,
+          customerId,
+          customerName: cust?.name ?? "Customer",
+          amount,
+          paymentMethod: method,
+          transactionDate: todayYmd,
+          status: "active",
+          operationId: opId,
+          priorCollected: priorExtra,
+          createdAt: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
       if (cust) {
         appendEntriesToDate(todayYmd, [
           {
             id: `pay-${Date.now()}`,
             role: "assistant",
-            content: `${cust.name} se ${formatINR(amount)} (${methodLabel}) payment receive ho gaya.`,
+            content: `${cust.name} se ${formatINR(amount)} (${methodLabel}) payment receive ho gaya aur Sales ledger mein include ho gaya.`,
             timestamp: formatTimeIST(new Date().toISOString()),
             language,
           },
@@ -2677,9 +2759,15 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
 
   const todayStats = useMemo(() => {
     const todaysSales = sales.filter((s) => s.transactionDate === todayYmd && s.status === "active");
-    const salesTotal = todaysSales.reduce((a, s) => a + s.totalAmount, 0);
-    const cashTotal = todaysSales.reduce((a, s) => a + s.paidAmount, 0);
-    const udhaarTotal = salesTotal - cashTotal;
+    const priorUdhaarCollectedToday = customerPayments
+      .filter((p) => p.status === "active" && p.transactionDate === todayYmd)
+      .reduce((a, p) => a + (p.priorCollected || 0), 0);
+    const salesTotal = todaysSales.reduce((a, s) => a + s.totalAmount, 0) + priorUdhaarCollectedToday;
+    const cashTotal = todaysSales.reduce((a, s) => a + s.paidAmount, 0) + priorUdhaarCollectedToday;
+    const udhaarTotal = Math.max(
+      0,
+      todaysSales.reduce((a, s) => a + (s.totalAmount - s.paidAmount), 0)
+    );
     const expensesTotal = expenses
       .filter((e) => e.transactionDate === todayYmd && e.status === "active")
       .reduce((a, e) => a + e.amount, 0);
@@ -2696,7 +2784,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
       outstandingTotal,
       lowStockProducts,
     };
-  }, [customers, expenses, movements, products, sales, todayYmd]);
+  }, [customerPayments, customers, expenses, movements, products, sales, todayYmd]);
 
   const submitAudioTurn = useCallback(
     async (audioBlob: Blob, fallbackTranscript?: string) => {
@@ -2760,6 +2848,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         customers,
         sales,
         expenses,
+        customerPayments,
         conversations,
         activeDate,
         setActiveDate,

@@ -141,6 +141,16 @@ def get_workspace_bootstrap(
         .data
         or []
     )
+    customer_payments = (
+        db.table("customer_payments")
+        .select("*, customers(name)")
+        .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .limit(80)
+        .execute()
+        .data
+        or []
+    )
 
     mem = Memory30DService(db)
     convs = mem.list_30d_conversations(business_id=business_id, timezone_name=biz.get("timezone", "Asia/Kolkata"))
@@ -167,6 +177,7 @@ def get_workspace_bootstrap(
         "customers": customers,
         "sales": sales,
         "expenses": expenses,
+        "customer_payments": customer_payments,
         "conversations": convs,
         "messages": msgs,
         "bi_foundation": AnalyticsFoundationService(db).get_readiness_summary(business_id=business_id),

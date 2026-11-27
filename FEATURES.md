@@ -107,6 +107,7 @@
   - [x] Sales Ledger filters (period / payment type), real-time profit & revenue summary (filtering strictly on `status === "active"`), and clear `"Cash"` / `"Online"` / `"Udhaar"` pills
 - [x] **Voice & UI Khata (`/customers`):**
   - [x] Create customer, query balances, add direct Udhaar (*"Ramesh ke khate mein 500 likh do"*), collect repayments (`POST /api/v1/customers/payments`), per-customer Khata history view, & **Edit Customer Modal (`PATCH /api/v1/customers/{id}`)**
+  - [x] **Udhaar Repayment → Sales & Revenue Inclusion (`record_customer_payment`):** Paying any Udhaar (via Voice or Khata UI) automatically FIFO-settles unpaid/partial `sales` rows (`Udhaar` → `Cash`/`Online`/`Partial`), converts prior-day/opening-balance repayments cleanly into Today's Collected Revenue & Sales totals without double-counting, and supports clean Reversal rollback
 - [x] **Voice & UI Expenses (`/expenses`):**
   - [x] Categorized daily shop expenses, Voice & Manual expense entry (`POST /api/v1/expenses`), period filters, & **Edit Expense Modal (`PATCH /api/v1/expenses/{id}`)**
 - [x] **Reports & Daily Replay (`/reports`):** Daily net revenue, collected cash/online, udhaar, expenses, stock velocity, & replay summaries

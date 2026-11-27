@@ -146,13 +146,34 @@ class QueryEngine:
                 "amount_inr": exp_total,
             }
 
+        def _prior_udhaar_collected_today() -> float:
+            if not self.db:
+                return 0.0
+            pay_res = (
+                self.db.table("customer_payments")
+                .select("notes, status")
+                .eq("business_id", business_id)
+                .eq("transaction_date", today_str)
+                .eq("status", "active")
+                .execute()
+            )
+            extra = 0.0
+            for pr in pay_res.data or []:
+                for tok in str(pr.get("notes") or "").split():
+                    if tok.startswith("[PRIOR_COLLECTED:") and tok.endswith("]"):
+                        try:
+                            extra += float(tok[len("[PRIOR_COLLECTED:") : -1])
+                        except ValueError:
+                            pass
+            return extra
+
         if topic == "daily_summary":
             sales_res = (
                 self.db.table("sales")
                 .select("total_amount, paid_amount, status")
                 .eq("business_id", business_id)
                 .eq("transaction_date", today_str)
-                .neq("status", "voided")
+                .eq("status", "active")
                 .execute()
             )
             exp_res = (
@@ -165,13 +186,14 @@ class QueryEngine:
             )
             s_rows = sales_res.data or []
             e_rows = exp_res.data or []
-            s_tot = sum(float(r["total_amount"]) for r in s_rows)
+            prior_collected = _prior_udhaar_collected_today()
+            s_tot = sum(float(r["total_amount"]) for r in s_rows) + prior_collected
             e_tot = sum(float(r["amount"]) for r in e_rows)
             net = s_tot - e_tot
             return {
                 "reply": f"Aaj ka hisaab: {len(s_rows)} sales (₹{s_tot:,.0f}), {len(e_rows)} expenses (₹{e_tot:,.0f}), net balance ₹{net:,.0f}.",
                 "lines": [
-                    {"label": "Sales Revenue", "value": f"₹{s_tot:,.0f}", "tone": "sage"},
+                    {"label": "Sales & Udhaar Collection", "value": f"₹{s_tot:,.0f}", "tone": "sage"},
                     {"label": "Expenses", "value": f"₹{e_tot:,.0f}", "tone": "crimson"},
                     {"label": "Net", "value": f"₹{net:,.0f}", "tone": "ochre" if net < 0 else "sage"},
                 ],
@@ -184,19 +206,25 @@ class QueryEngine:
             .select("total_amount, paid_amount, payment_status, status")
             .eq("business_id", business_id)
             .eq("transaction_date", today_str)
-            .neq("status", "voided")
+            .eq("status", "active")
             .execute()
         )
         rows = sales_res.data or []
-        total = sum(float(r["total_amount"]) for r in rows)
-        cash = sum(float(r["paid_amount"]) for r in rows)
-        credit = total - cash
+        prior_collected = _prior_udhaar_collected_today()
+        billed_today = sum(float(r["total_amount"]) for r in rows)
+        direct_paid = sum(float(r["paid_amount"]) for r in rows)
+        total = billed_today + prior_collected
+        cash = direct_paid + prior_collected
+        credit = max(0.0, billed_today - direct_paid)
+        lines = [
+            {"label": "Total Bills", "value": str(len(rows)), "tone": "neutral"},
+            {"label": "Paid Collected (Cash/Online)", "value": f"₹{cash:,.0f}", "tone": "sage"},
+            {"label": "Udhaar Remaining", "value": f"₹{credit:,.0f}", "tone": "ochre"},
+        ]
+        if prior_collected > 0:
+            lines.append({"label": "Prior Udhaar Collected Today", "value": f"₹{prior_collected:,.0f}", "tone": "sage"})
         return {
-            "reply": f"Aaj abhi tak {len(rows)} sales hui hain, total ₹{total:,.0f} (Cash ₹{cash:,.0f}, Udhaar ₹{credit:,.0f}).",
-            "lines": [
-                {"label": "Total Bills", "value": str(len(rows)), "tone": "neutral"},
-                {"label": "Cash Collected", "value": f"₹{cash:,.0f}", "tone": "sage"},
-                {"label": "Udhaar", "value": f"₹{credit:,.0f}", "tone": "ochre"},
-            ],
+            "reply": f"Aaj abhi tak {len(rows)} sales hui hain, total ₹{total:,.0f} (Collected ₹{cash:,.0f}, Udhaar ₹{credit:,.0f}).",
+            "lines": lines,
             "amount_inr": total,
         }

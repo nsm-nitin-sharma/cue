@@ -262,3 +262,166 @@ def test_multivariant_disambiguation_with_existing_alias_and_llm_guard():
     # Variant size corrections like "70g nahi 250 gram" must NOT extract 250 as sale quantity!
     assert extract_post_negation_quantity("Maggi Masala 70g nahi 250 gram") is None
     assert extract_post_negation_quantity("20 pepsi nahi 10 hi biki") == 10.0
+
+
+def test_udhaar_payment_settles_sales_and_includes_in_revenue():
+    from app.services.transaction_engine import TransactionEngine
+
+    class _FakeResp:
+        def __init__(self, data):
+            self.data = data
+
+    class _FakeQuery:
+        def __init__(self, store, name):
+            self.store = store
+            self.name = name
+            self._action = "select"
+            self._payload = None
+            self._filters = []
+
+        def select(self, *_a, **_k):
+            self._action = "select"
+            return self
+
+        def update(self, payload):
+            self._action = "update"
+            self._payload = payload
+            return self
+
+        def insert(self, payload):
+            self._action = "insert"
+            self._payload = payload
+            return self
+
+        def eq(self, k, v):
+            self._filters.append(("eq", k, v))
+            return self
+
+        def neq(self, k, v):
+            self._filters.append(("neq", k, v))
+            return self
+
+        def in_(self, k, vals):
+            self._filters.append(("in", k, set(vals)))
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            rows = self.store[self.name]
+            if self._action == "insert":
+                new_row = {"id": f"new-{len(rows) + 1}", **self._payload}
+                rows.append(new_row)
+                return _FakeResp([new_row])
+            matched = []
+            for r in rows:
+                ok = True
+                for kind, k, v in self._filters:
+                    if kind == "eq" and r.get(k) != v:
+                        ok = False
+                    elif kind == "neq" and r.get(k) == v:
+                        ok = False
+                    elif kind == "in" and r.get(k) not in v:
+                        ok = False
+                if ok:
+                    matched.append(r)
+            if self._action == "update":
+                for r in matched:
+                    r.update(self._payload)
+            return _FakeResp(matched)
+
+    class _FakeRPC:
+        def __init__(self, store, fn_name, params):
+            self.store = store
+            self.fn_name = fn_name
+            self.params = params
+
+        def execute(self):
+            if self.fn_name == "rpc_record_customer_payment":
+                cust = next(c for c in self.store["customers"] if c["id"] == self.params["p_customer_id"])
+                before = float(cust["outstanding_balance"])
+                after = max(0.0, before - float(self.params["p_amount"]))
+                cust["outstanding_balance"] = after
+                py = {
+                    "id": "pay-1",
+                    "business_id": self.params["p_business_id"],
+                    "customer_id": cust["id"],
+                    "amount": self.params["p_amount"],
+                    "payment_method": self.params["p_payment_method"],
+                    "transaction_date": self.params["p_transaction_date"],
+                    "status": "active",
+                    "operation_id": self.params["p_operation_id"],
+                    "notes": self.params["p_notes"],
+                }
+                self.store["customer_payments"].append(py)
+                return _FakeResp({"payment_id": "pay-1", "before_balance": before, "after_balance": after})
+            return _FakeResp({})
+
+    class _FakeDB:
+        def __init__(self, store):
+            self.store = store
+
+        def table(self, name):
+            return _FakeQuery(self.store, name)
+
+        def rpc(self, fn_name, params):
+            return _FakeRPC(self.store, fn_name, params)
+
+    store = {
+        "customers": [{"id": "c1", "business_id": "b1", "outstanding_balance": 400.0}],
+        "sales": [
+            {
+                "id": "s1",
+                "business_id": "b1",
+                "customer_id": "c1",
+                "total_amount": 400.0,
+                "paid_amount": 0.0,
+                "payment_status": "credit",
+                "transaction_date": "2026-11-27",
+                "status": "active",
+                "operation_id": "op-sale-1",
+                "notes": "[UDHAAR] Voice sale",
+            }
+        ],
+        "customer_payments": [],
+        "expenses": [],
+        "inventory_movements": [],
+        "voice_transactions": [],
+    }
+    engine = TransactionEngine(_FakeDB(store))
+    res = engine.record_customer_payment(
+        business_id="b1",
+        user_id="u1",
+        customer_id="c1",
+        amount=400.0,
+        payment_method="upi",
+        transaction_date="2026-11-27",
+        operation_id="op-pay-1",
+    )
+    assert res["after_balance"] == 0.0
+    assert res["settled_sales_count"] == 1
+    assert store["sales"][0]["paid_amount"] == 400.0
+    assert store["sales"][0]["payment_status"] == "paid"
+    assert "[ONLINE]" in store["sales"][0]["notes"]
+
+    # QueryEngine immediately reflects collected revenue & zero remaining Udhaar
+    qe = QueryEngine(_FakeDB(store))
+    summary = qe.answer_query(business_id="b1", topic="sales_summary")
+    assert summary["amount_inr"] == 400.0
+    assert "Collected ₹400" in summary["reply"]
+
+    # Reversing the payment restores outstanding balance & unpaid sale status cleanly
+    engine.reverse_operation(
+        business_id="b1",
+        user_id="u1",
+        operation_id="op-pay-1",
+        reversal_operation_id="op-rev-1",
+        transaction_date="2026-11-27",
+    )
+    assert store["customers"][0]["outstanding_balance"] == 400.0
+    assert store["sales"][0]["paid_amount"] == 0.0
+    assert store["sales"][0]["payment_status"] == "credit"

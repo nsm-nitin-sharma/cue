@@ -1700,7 +1700,11 @@ class VoicePipelineService:
                             transaction_date=txn_date_str,
                             operation_id=sub_op_id,
                         )
-                        rep = f"{cust['name']} se ₹{amt:,.0f} receive ho gaya. Remaining balance: ₹{pay['after_balance']:,.0f}."
+                        method_label = "Online" if (op.payment_method or "cash") == "upi" else (op.payment_method or "cash").title()
+                        rep = (
+                            f"{cust['name']} se ₹{amt:,.0f} ({method_label}) receive ho gaya aur Sales ledger mein include ho gaya. "
+                            f"Remaining balance: ₹{pay['after_balance']:,.0f}."
+                        )
                         replies.append(rep)
                         receipts.append(
                             {
@@ -1708,11 +1712,15 @@ class VoicePipelineService:
                                 "operationId": sub_op_id,
                                 "kind": "payment",
                                 "title": f"Payment Received · {cust['name']}",
-                                "subtitle": f"Via {'Online' if (op.payment_method or 'cash') == 'upi' else (op.payment_method or 'cash').title()}",
+                                "subtitle": f"Via {method_label} · Included in Sales & Revenue",
                                 "transactionDate": txn_date_str,
                                 "amountINR": amt,
-                                "lines": [{"label": "Remaining Balance", "value": f"₹{pay['after_balance']:,.0f}", "tone": "sage"}],
+                                "lines": [
+                                    {"label": "Sales Ledger", "value": "Updated & Included", "tone": "sage"},
+                                    {"label": "Remaining Balance", "value": f"₹{pay['after_balance']:,.0f}", "tone": "ochre" if pay["after_balance"] > 0 else "sage"},
+                                ],
                                 "status": "saved",
+                                "reversible": True,
                             }
                         )
 

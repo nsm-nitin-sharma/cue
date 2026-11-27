@@ -394,7 +394,104 @@ class TransactionEngine:
                 "p_notes": "Payment recorded",
             },
         ).execute()
-        return res.data
+        pay_data = dict(res.data or {})
+        payment_id = pay_data.get("payment_id")
+
+        method_tag = "ONLINE" if payment_method == "upi" else ("BANK" if payment_method == "bank" else "CASH")
+        remaining = max(0.0, float(amount))
+        settled_entries: list[str] = []
+        prior_collected = 0.0
+        same_day_settled = 0.0
+
+        # 1. FIFO-settle this customer's active unpaid/partial sales so Sales Ledger, Revenue & Paid status stay accurate
+        unpaid_sales = (
+            self.db.table("sales")
+            .select("id, total_amount, paid_amount, payment_status, transaction_date, notes")
+            .eq("business_id", business_id)
+            .eq("customer_id", customer_id)
+            .eq("status", "active")
+            .in_("payment_status", ["credit", "partial"])
+            .order("transaction_date", desc=False)
+            .order("created_at", desc=False)
+            .execute()
+            .data
+            or []
+        )
+        for s in unpaid_sales:
+            if remaining <= 0.009:
+                break
+            tot = float(s.get("total_amount") or 0)
+            old_paid = float(s.get("paid_amount") or 0)
+            due = max(0.0, tot - old_paid)
+            if due <= 0.009:
+                continue
+            apply_amt = min(remaining, due)
+            new_paid = round(old_paid + apply_amt, 2)
+            old_status = str(s.get("payment_status") or "credit")
+            new_status = "paid" if new_paid >= tot - 0.009 else "partial"
+
+            raw_notes = str(s.get("notes") or "")
+            cleaned_notes = (
+                raw_notes.replace("[UDHAAR]", "")
+                .replace("[CASH]", "")
+                .replace("[ONLINE]", "")
+                .replace("[BANK]", "")
+                .strip()
+            )
+            new_notes = f"[{method_tag}] {cleaned_notes}".strip()
+            if "Udhaar paid" not in new_notes:
+                new_notes = f"{new_notes} · Udhaar paid ({transaction_date})".strip(" ·")
+
+            self.db.table("sales").update(
+                {
+                    "paid_amount": new_paid,
+                    "payment_status": new_status,
+                    "notes": new_notes,
+                }
+            ).eq("id", s["id"]).eq("business_id", business_id).execute()
+
+            remaining = round(remaining - apply_amt, 2)
+            s_date = str(s.get("transaction_date") or transaction_date)
+            if s_date == transaction_date:
+                same_day_settled = round(same_day_settled + apply_amt, 2)
+            else:
+                prior_collected = round(prior_collected + apply_amt, 2)
+            settled_entries.append(f"{s['id']}|{old_paid:g}|{old_status}|{apply_amt:g}|{s_date}")
+
+        # 2. If customer paid off an Opening Balance or unbilled balance (no prior sale row), record a paid sale entry
+        new_sale_created = 0.0
+        if remaining > 0.01:
+            self.db.table("sales").insert(
+                {
+                    "business_id": business_id,
+                    "customer_id": customer_id,
+                    "total_amount": remaining,
+                    "paid_amount": remaining,
+                    "payment_status": "paid",
+                    "transaction_date": transaction_date,
+                    "status": "active",
+                    "operation_id": operation_id,
+                    "notes": f"[{method_tag}] Udhaar settlement",
+                    "created_by": user_id,
+                }
+            ).execute()
+            new_sale_created = remaining
+
+        if payment_id:
+            note_parts = ["Payment recorded"]
+            if prior_collected > 0:
+                note_parts.append(f"[PRIOR_COLLECTED:{prior_collected:g}]")
+            if settled_entries:
+                note_parts.append(f"[SETTLED:{';'.join(settled_entries)}]")
+            self.db.table("customer_payments").update({"notes": " ".join(note_parts)}).eq("id", payment_id).eq(
+                "business_id", business_id
+            ).execute()
+
+        pay_data["settled_sales_count"] = len(settled_entries)
+        pay_data["same_day_settled"] = same_day_settled
+        pay_data["prior_day_collected"] = prior_collected
+        pay_data["new_sale_created"] = new_sale_created
+        return pay_data
 
     def correct_sale_quantity(
         self,
@@ -926,6 +1023,54 @@ class TransactionEngine:
                 "business_id", business_id
             ).execute()
             reversed_parts.append(f"Expense ₹{float(ex['amount']):,.0f}")
+
+        # 2b. Reverse active customer payment (and restore settled sales + Khata due)
+        pay_rows = (
+            self.db.table("customer_payments")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("operation_id", operation_id)
+            .eq("status", "active")
+            .execute()
+            .data
+            or []
+        )
+        for py in pay_rows:
+            self.db.table("customer_payments").update({"status": "voided"}).eq("id", py["id"]).eq(
+                "business_id", business_id
+            ).execute()
+            amt = float(py.get("amount") or 0)
+            if py.get("customer_id") and amt > 0:
+                cust_rows = (
+                    self.db.table("customers")
+                    .select("outstanding_balance")
+                    .eq("id", py["customer_id"])
+                    .eq("business_id", business_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if cust_rows:
+                    restored_bal = round(float(cust_rows[0]["outstanding_balance"] or 0) + amt, 2)
+                    self.db.table("customers").update(
+                        {"outstanding_balance": restored_bal, "updated_at": "now()"}
+                    ).eq("id", py["customer_id"]).eq("business_id", business_id).execute()
+
+            for tok in str(py.get("notes") or "").split():
+                if tok.startswith("[SETTLED:") and tok.endswith("]"):
+                    entries_str = tok[len("[SETTLED:") : -1]
+                    for entry in entries_str.split(";"):
+                        parts = entry.split("|")
+                        if len(parts) >= 3:
+                            sid, old_paid_s, old_stat = parts[0], parts[1], parts[2]
+                            try:
+                                self.db.table("sales").update(
+                                    {"paid_amount": float(old_paid_s), "payment_status": old_stat}
+                                ).eq("id", sid).eq("business_id", business_id).execute()
+                            except Exception:
+                                pass
+            reversed_parts.append(f"Payment ₹{amt:,.0f}")
 
         # 3. Compensate inventory movements (append-only reversal)
         mv_rows = (
