@@ -167,7 +167,14 @@ export function LivingAcousticOrb() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
       streamRef.current = stream;
 
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
@@ -211,7 +218,9 @@ export function LivingAcousticOrb() {
         SpeechRecognition?: new () => SpeechRecognitionInstanceLike;
         webkitSpeechRecognition?: new () => SpeechRecognitionInstanceLike;
       };
-      const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
+      const SpeechRec = !(isLiveBackend && !isOffline)
+        ? win.SpeechRecognition || win.webkitSpeechRecognition
+        : undefined;
       if (SpeechRec) {
         const rec = new SpeechRec();
         rec.lang = language === "hi" ? "hi-IN" : "en-IN";

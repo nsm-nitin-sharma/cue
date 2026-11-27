@@ -14,6 +14,11 @@ IntentType = Literal[
     "record_sale",
     "record_expense",
     "record_customer_payment",
+    "record_udhaar_credit",
+    "create_customer",
+    "update_customer",
+    "update_product_settings",
+    "archive_product",
     "correct_last_sale",
     "undo_last_operation",
     "business_day_replay",
@@ -39,10 +44,16 @@ class VoiceOperationItem(StrictModel):
     payment_method: Literal["cash", "upi", "bank", "credit"] | None = None
     expense_category: str | None = Field(default=None, max_length=64)
     description: str | None = Field(default=None, max_length=240)
+    phone: str | None = Field(default=None, max_length=32)
+    area_note: str | None = Field(default=None, max_length=120)
+    low_stock_threshold: float | None = Field(default=None, ge=0, le=10000)
     relative_date: str | None = Field(default=None, max_length=48)
     uses_prior_context: bool = False
     is_affirmative: bool | None = None
     is_negative: bool | None = None
+    confidence: float = Field(default=0.95, ge=0.0, le=1.0)
+    has_ambiguity_or_noise_conflict: bool = False
+    clarification_question: str | None = Field(default=None, max_length=240)
     query_topic: Literal["sales_summary", "pending_payments", "customer_balance", "stock_check", "general"] | None = None
     notes: str | None = Field(default=None, max_length=240)
 
@@ -61,6 +72,9 @@ class IntentProposal(StrictModel):
     """
 
     detected_language: Literal["hinglish", "hi", "en"] = "hinglish"
+    confidence: float = Field(default=0.95, ge=0.0, le=1.0)
+    has_ambiguity_or_noise_conflict: bool = False
+    clarification_question: str | None = Field(default=None, max_length=240)
     operations: list[VoiceOperationItem] = Field(default_factory=list, max_length=25)
     spoken_reply_hint: str | None = Field(default=None, max_length=300)
 
@@ -111,7 +125,7 @@ class OnboardStoreRequest(StrictModel):
     name: str = Field(min_length=2, max_length=120)
     city: str = Field(default="", max_length=80)
     plan_code: Literal["free", "growth", "pro"] = "free"
-    seed_sample_catalog: bool = True
+    seed_sample_catalog: bool = False
 
 
 class ManualProductRequest(StrictModel):

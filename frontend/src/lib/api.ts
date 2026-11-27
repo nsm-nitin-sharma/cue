@@ -126,3 +126,32 @@ export async function syncOfflineBatchRemote(
     body: JSON.stringify({ items }),
   });
 }
+
+export async function archiveProductRemote(productId: string) {
+  return apiFetch<{ status: string; product_id: string }>(
+    `/inventory/products/${encodeURIComponent(productId)}/archive`,
+    { method: "POST" }
+  );
+}
+
+export async function clearUnusedCatalogRemote() {
+  return apiFetch<{ status: string; archived_count: number }>("/inventory/clear-unused", {
+    method: "POST",
+  });
+}
+
+export async function addManualProductRemote(payload: {
+  name: string;
+  category: string;
+  base_unit: BaseUnit;
+  cost_price: number;
+  selling_price: number;
+  stock: number;
+  low_stock_threshold: number;
+  aliases: string[];
+}) {
+  return apiFetch<{ product: Record<string, unknown> }>("/inventory/products", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}

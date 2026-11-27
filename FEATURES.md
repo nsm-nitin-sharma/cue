@@ -33,7 +33,8 @@
   - [x] `Free` tier active out-of-the-box for testing within defined quotas (`250/mo`, no payment required)
   - [x] `Growth` & `Pro` configurable tiers with DB-driven feature/quota flags (no hardcoded pricing)
   - [x] Server-side tier entitlement & monthly quota enforcement (`entitlements.py`)
-- [x] Store onboarding flow + optional Kirana sample catalog & alias seeder (`rpc_onboard_business`)
+- [x] **Store Onboarding (Clean Empty Store by Default):** Brand-new stores start with zero preloaded fake items unless the owner explicitly opts in to sample kirana data
+- [x] **Visible Logged-In Account & Store Identity:** Clear signed-in user badge (`name/email`, active store, Sign Out) visible in the top bar
 - [x] `business_members` multi-staff RBAC schema readiness
 
 ---
@@ -41,7 +42,8 @@
 ## 3. Voice Pipeline & Modular AI/Speech Stack (100% Free)
 
 - [x] Browser `MediaRecorder` capture with cross-browser codec negotiation (`webm/opus` → `webm` → `mp4`)
-- [x] Web Audio API live frequency waveform + RMS energy visualization
+- [x] **Hardware Noise Cancellation + Acoustic Filtering:** `echoCancellation`, `noiseSuppression`, `autoGainControl` + Web Audio waveform
+- [x] **Background Shop Chatter & Conflict Guard (Intent First):** Isolates owner intent from bystander background speech; if even slightest confusion exists (`has_ambiguity_or_noise_conflict` / low confidence), asks clarification with zero assumptions
 - [x] Browser `SpeechSynthesis` spoken responses (`hi-IN` / `en-IN` voices + mute/replay controls)
 - [x] **Voice Barge-In / Auto-Stop TTS:** Cue immediately stops speaking whenever the user starts speaking or activates the mic
 - [x] **Modular `STTProvider` Interface:**
@@ -96,11 +98,11 @@
 
 - [x] Required Database Tables (`001_schema.sql` live in Supabase): `businesses`, `products`, `product_aliases`, `inventory`, `inventory_movements`, `customers`, `sales`, `sale_items`, `expenses`, `conversations`, `voice_transactions`
 - [x] Additional Enterprise Tables (`001_schema.sql` live in Supabase): `business_members`, `product_unit_conversions`, `customer_payments`, `conversation_messages`, `pending_confirmations`, `subscription_plans`, `business_subscriptions`, `business_insights_events`
-- [x] Voice & UI Inventory: Receive, Deduct, Damage/Expiry, Adjustment, Low-stock alerts, Movement History
+- [x] Voice & UI Inventory: Receive, Deduct, Damage/Expiry, Adjustment, Low-stock alerts, Movement History, **Stock Queries** (*"Inventory mein kitni Maggi padi hai?"*), **Price/Threshold Updates**, & Safe Soft-Archive
 - [x] Voice & UI Sales: Cash, Partial, and Credit (`Udhaar`) sales with itemized breakdown
-- [x] Voice & UI Customers: Customer credit ledger, payment collection, pending balance queries
+- [x] **Voice & UI Khata (Full Non-Destructive CRUD):** Create customer, query balances (*"Ramesh ka kitna udhaar hai?"*), add direct udhaar (*"Ramesh ke khate mein 500 likh do"*), collect payments, and update customer phone/area notes
 - [x] Voice & UI Expenses: Categorized daily shop expenses
-- [x] Natural Business Queries (*"Aaj kitni sale hui?"*, *"Ramesh ka kitna payment pending hai?"*)
+- [x] **Intent-First Agentic Understanding:** Handles free-form natural phrasing (*"20 Maggi sold"*, *"bees maggi nikal gayi"*, *"customer 20 maggi le gaya"*) rather than rigid templates
 - [x] **Future BI Foundation (Section 10):** Clean time-series collection + `analytics_foundation.py` modular stub
 
 ---

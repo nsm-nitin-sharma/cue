@@ -232,3 +232,24 @@ def add_manual_payment(
         transaction_date=get_business_today().isoformat(),
         operation_id=str(uuid.uuid4()),
     )
+
+
+@router.post("/inventory/products/{product_id}/archive")
+def archive_inventory_product(
+    product_id: str,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    tx.archive_product(business_id=business_id, product_id=product_id)
+    return {"status": "archived", "product_id": product_id}
+
+
+@router.post("/inventory/clear-unused")
+def clear_unused_inventory_products(
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    archived_count = tx.archive_unused_products(business_id=business_id)
+    return {"status": "ok", "archived_count": archived_count}

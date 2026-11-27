@@ -11,6 +11,9 @@ import { formatINR, formatQty, formatTimeIST, getTodayIST, makeOperationId } fro
 import { speakReply, stopSpeaking } from "@/lib/tts";
 import { supabase } from "@/lib/supabase";
 import {
+  addManualProductRemote,
+  archiveProductRemote,
+  clearUnusedCatalogRemote,
   confirmTier3Remote,
   createProductFromPopupRemote,
   fetchWorkspaceBootstrap,
@@ -97,6 +100,14 @@ interface CueWorkspaceContextValue {
   confirmPendingHighValue: () => void;
   cancelPendingHighValue: () => void;
   isLiveBackend: boolean;
+  authUser: { id: string; email: string; name: string } | null;
+  needsOnboarding: boolean;
+  isDemoMode: boolean;
+  signOut: () => Promise<void>;
+  refreshWorkspace: () => Promise<void>;
+  archiveProduct: (productId: string) => Promise<void>;
+  clearUnusedCatalog: () => Promise<number>;
+  enableDemoPreview: () => void;
   submitAudioTurn: (audioBlob: Blob, fallbackTranscript?: string) => Promise<void>;
   submitCommand: (rawText: string, opts?: { fromOfflineSync?: boolean; operationId?: string }) => Promise<void>;
   selectClarificationCandidate: (candidate: ClarificationCandidate) => void;
@@ -325,12 +336,12 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   const dayMinus23Ymd = useMemo(() => shiftDate(todayYmd, -23), [todayYmd]);
 
   const [store, setStore] = useState<StoreProfile>({
-    name: "Sharma Kirana & General Store",
-    ownerName: "Nitin Sharma",
-    city: "Jaipur, RJ",
+    name: "My Store",
+    ownerName: "",
+    city: "",
     timezone: "Asia/Kolkata",
     tier: "free",
-    monthlyVoiceUsed: 38,
+    monthlyVoiceUsed: 0,
     monthlyVoiceLimit: 250,
   });
 
@@ -340,256 +351,18 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   const [voicePhase, setVoicePhase] = useState<VoicePhase>("idle");
   const [statusMessage, setStatusMessage] = useState<string>("Ready to listen");
 
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
-
-  const [movements, setMovements] = useState<InventoryMovement[]>([
-    {
-      id: "mov-init-1",
-      productId: "prod-pepsi-500",
-      productName: "Pepsi 500ml",
-      movementType: "receive",
-      quantityDelta: 20,
-      unit: "piece",
-      unitCost: 16,
-      transactionDate: yesterdayYmd,
-      notes: "Supplier delivery (yesterday)",
-      operationId: "op-yest-pepsi",
-      createdAt: `${yesterdayYmd}T10:15:00+05:30`,
-    },
-    {
-      id: "mov-init-2",
-      productId: "prod-maggi-70",
-      productName: "Maggi Masala 70g",
-      movementType: "sale",
-      quantityDelta: -6,
-      unit: "packet",
-      transactionDate: todayYmd,
-      notes: "Walk-in cash sale",
-      operationId: "op-today-maggi",
-      createdAt: `${todayYmd}T09:40:00+05:30`,
-    },
-    {
-      id: "mov-init-3",
-      productId: "prod-salt-1kg",
-      productName: "Tata Salt 1kg",
-      movementType: "sale",
-      quantityDelta: -4,
-      unit: "packet",
-      transactionDate: todayYmd,
-      notes: "Morning retail sale",
-      operationId: "op-today-salt",
-      createdAt: `${todayYmd}T11:05:00+05:30`,
-    },
-  ]);
-
-  const [sales, setSales] = useState<Sale[]>([
-    {
-      id: "sale-init-1",
-      customerName: "Walk-in Customer",
-      items: [
-        {
-          productId: "prod-maggi-70",
-          productName: "Maggi Masala 70g",
-          quantity: 6,
-          unit: "packet",
-          unitPrice: 14,
-          lineTotal: 84,
-        },
-      ],
-      totalAmount: 84,
-      paidAmount: 84,
-      paymentStatus: "paid",
-      transactionDate: todayYmd,
-      status: "active",
-      operationId: "op-today-maggi",
-      createdAt: `${todayYmd}T09:40:00+05:30`,
-    },
-    {
-      id: "sale-init-2",
-      customerName: "Walk-in Customer",
-      items: [
-        {
-          productId: "prod-salt-1kg",
-          productName: "Tata Salt 1kg",
-          quantity: 4,
-          unit: "packet",
-          unitPrice: 28,
-          lineTotal: 112,
-        },
-      ],
-      totalAmount: 112,
-      paidAmount: 112,
-      paymentStatus: "paid",
-      transactionDate: todayYmd,
-      status: "active",
-      operationId: "op-today-salt",
-      createdAt: `${todayYmd}T11:05:00+05:30`,
-    },
-    {
-      id: "sale-init-3",
-      customerId: "cust-ramesh-g",
-      customerName: "Ramesh Gupta",
-      items: [
-        {
-          productId: "prod-oil-1l",
-          productName: "Fortune Sunflower Oil 1L",
-          quantity: 2,
-          unit: "litre",
-          unitPrice: 155,
-          lineTotal: 310,
-        },
-      ],
-      totalAmount: 310,
-      paidAmount: 0,
-      paymentStatus: "credit",
-      transactionDate: dayMinus3Ymd,
-      status: "active",
-      operationId: "op-day3-ramesh",
-      createdAt: `${dayMinus3Ymd}T17:20:00+05:30`,
-    },
-  ]);
-
-  const [expenses, setExpenses] = useState<Expense[]>([
-    {
-      id: "exp-init-1",
-      category: "Transport / Tempo",
-      description: "Mandi delivery tempo bhada",
-      amount: 250,
-      paymentMethod: "cash",
-      transactionDate: todayYmd,
-      status: "active",
-      operationId: "op-exp-tempo",
-      createdAt: `${todayYmd}T08:50:00+05:30`,
-    },
-    {
-      id: "exp-init-2",
-      category: "Utilities",
-      description: "Shop electricity bill",
-      amount: 1450,
-      paymentMethod: "upi",
-      transactionDate: dayMinus3Ymd,
-      status: "active",
-      operationId: "op-exp-elec",
-      createdAt: `${dayMinus3Ymd}T14:15:00+05:30`,
-    },
-  ]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [movements, setMovements] = useState<InventoryMovement[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
 
   const [conversations, setConversations] = useState<DayConversation[]>([
     {
       date: todayYmd,
       label: "Today",
-      summary: "Morning opening stock & retail sales active",
-      entries: [
-        {
-          id: "entry-t-1",
-          role: "user",
-          content: "Subah 6 Maggi packet aur 4 Tata Salt cash mein biki.",
-          timestamp: "09:40 AM",
-          language: "hinglish",
-        },
-        {
-          id: "entry-t-2",
-          role: "assistant",
-          content: "6 Maggi Masala 70g aur 4 Tata Salt 1kg ki cash sale record ho gayi hai. Total ₹196.",
-          timestamp: "09:40 AM",
-          language: "hinglish",
-          operationId: "op-today-salt",
-          receipt: {
-            id: "slip-today-1",
-            operationId: "op-today-salt",
-            kind: "sale",
-            title: "Morning Cash Sale",
-            subtitle: "Walk-in Customer · Verified Ledger",
-            transactionDate: todayYmd,
-            amountINR: 196,
-            lines: [
-              { label: "Maggi Masala 70g", value: "-6 pkts · ₹84", tone: "sage" },
-              { label: "Tata Salt 1kg", value: "-4 pkts · ₹112", tone: "sage" },
-            ],
-            status: "saved",
-            reversible: true,
-          },
-        },
-      ],
-    },
-    {
-      date: yesterdayYmd,
-      label: "Yesterday",
-      summary: "20 Pepsi 500ml received (₹320) · Sunita Devi ₹450 paid",
-      entries: [
-        {
-          id: "entry-y-1",
-          role: "user",
-          content: "Aaj supplier se 20 Pepsi 500ml bottles aayi ₹16 ke rate par.",
-          timestamp: "10:15 AM",
-          language: "hinglish",
-        },
-        {
-          id: "entry-y-2",
-          role: "assistant",
-          content: "20 Pepsi 500ml bottles ₹16/unit par receive ho gayi hain. Total ₹320.",
-          timestamp: "10:15 AM",
-          language: "hinglish",
-          operationId: "op-yest-pepsi",
-          receipt: {
-            id: "slip-yest-1",
-            operationId: "op-yest-pepsi",
-            kind: "receive",
-            title: "Stock Received · Pepsi 500ml",
-            subtitle: "Supplier Delivery · Stored in 30-day memory",
-            transactionDate: yesterdayYmd,
-            amountINR: 320,
-            lines: [
-              { label: "Quantity", value: "+20 pieces @ ₹16", tone: "sage" },
-              { label: "Closing Stock", value: "24 pieces", tone: "neutral" },
-            ],
-            status: "saved",
-          },
-        },
-      ],
-    },
-    {
-      date: dayMinus3Ymd,
-      label: formatDayBadge(dayMinus3Ymd, todayYmd),
-      summary: "Ramesh Gupta udhaar ₹310 · Bijli bill ₹1,450 UPI",
-      entries: [
-        {
-          id: "entry-3d-1",
-          role: "assistant",
-          content: "Is din Ramesh Gupta ko 2L Fortune Oil udhaar (₹310) aur ₹1,450 electricity bill UPI record hua tha.",
-          timestamp: "05:20 PM",
-          language: "hinglish",
-        },
-      ],
-    },
-    {
-      date: dayMinus9Ymd,
-      label: formatDayBadge(dayMinus9Ymd, todayYmd),
-      summary: "12 Fortune Oil pouch received · ₹1,584",
-      entries: [
-        {
-          id: "entry-9d-1",
-          role: "assistant",
-          content: "12 Fortune Sunflower Oil 1L ₹132/unit par receive hua tha (30-day rolling window mein active).",
-          timestamp: "11:30 AM",
-          language: "hinglish",
-        },
-      ],
-    },
-    {
-      date: dayMinus23Ymd,
-      label: formatDayBadge(dayMinus23Ymd, todayYmd),
-      summary: "Monthly staples restock · ₹4,820",
-      entries: [
-        {
-          id: "entry-23d-1",
-          role: "assistant",
-          content: "23 din pehle ke staples restock aur udhaar settlement logs yahan preserved hain.",
-          timestamp: "01:10 PM",
-          language: "hinglish",
-        },
-      ],
+      summary: "Ready for voice or text commands",
+      entries: [],
     },
   ]);
 
@@ -599,6 +372,9 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [pendingFlow, setPendingFlow] = useState<PendingFlowState>(null);
   const [isLiveBackend, setIsLiveBackend] = useState<boolean>(false);
+  const [authUser, setAuthUser] = useState<{ id: string; email: string; name: string } | null>(null);
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean>(false);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
 
   // Track last entity / operation in active day context for anaphora & corrections
   const [lastContext, setLastContext] = useState<{
@@ -617,11 +393,20 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     if (!supabase) return;
     const { data: sessionData } = await supabase.auth.getSession();
     if (!sessionData.session) {
+      setAuthUser(null);
+      setNeedsOnboarding(false);
       setIsLiveBackend(false);
       return;
     }
+    const u = sessionData.session.user;
+    const displayName = String(
+      u.user_metadata?.full_name || u.user_metadata?.name || u.email || "Owner"
+    );
+    setAuthUser({ id: u.id, email: u.email ?? "", name: displayName });
     try {
       const boot = (await fetchWorkspaceBootstrap()) as Record<string, unknown>;
+      setNeedsOnboarding(false);
+      setIsDemoMode(false);
       const biz = boot.business as Record<string, unknown> | undefined;
       const sub = boot.subscription as Record<string, unknown> | undefined;
       if (biz) {
@@ -630,7 +415,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         const code = (plan.code as SubscriptionTierCode | undefined) ?? "free";
         setStore({
           name: String(biz.name ?? "Store"),
-          ownerName: sessionData.session.user.email ?? "Owner",
+          ownerName: displayName,
           city: String(biz.city ?? ""),
           timezone: String(biz.timezone ?? "Asia/Kolkata"),
           tier: code,
@@ -762,10 +547,23 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
             };
           })
         );
+      } else {
+        setConversations([
+          {
+            date: todayYmd,
+            label: "Today",
+            summary: "Ready for voice or text commands",
+            entries: [],
+          },
+        ]);
       }
       setIsLiveBackend(true);
       setStatusMessage("Live · Groq Whisper + Gemini");
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : "";
+      if (msg.includes("no store") || msg.includes("404") || msg.includes("onboard")) {
+        setNeedsOnboarding(true);
+      }
       setIsLiveBackend(false);
     }
   }, [todayYmd]);
@@ -2606,9 +2404,98 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     setStore((prev) => ({ ...prev, ...patch }));
   }, []);
 
-  const addManualProduct = useCallback((p: Omit<Product, "id">) => {
-    setProducts((prev) => [{ ...p, id: `prod-${Date.now()}` }, ...prev]);
+  const addManualProduct = useCallback(
+    (p: Omit<Product, "id">) => {
+      if (isLiveBackend) {
+        addManualProductRemote({
+          name: p.name,
+          category: p.category,
+          base_unit: p.baseUnit,
+          cost_price: p.costPrice,
+          selling_price: p.sellingPrice,
+          stock: p.stock,
+          low_stock_threshold: p.lowStockThreshold,
+          aliases: p.aliases,
+        })
+          .then(() => refreshLiveWorkspace())
+          .catch(() => setProducts((prev) => [{ ...p, id: `prod-${Date.now()}` }, ...prev]));
+        return;
+      }
+      setProducts((prev) => [{ ...p, id: `prod-${Date.now()}` }, ...prev]);
+    },
+    [isLiveBackend, refreshLiveWorkspace]
+  );
+
+  const archiveProduct = useCallback(
+    async (productId: string) => {
+      if (isLiveBackend) {
+        await archiveProductRemote(productId);
+        await refreshLiveWorkspace();
+        return;
+      }
+      setProducts((prev) => prev.filter((p) => p.id !== productId));
+    },
+    [isLiveBackend, refreshLiveWorkspace]
+  );
+
+  const clearUnusedCatalog = useCallback(async (): Promise<number> => {
+    if (isLiveBackend) {
+      const res = await clearUnusedCatalogRemote();
+      await refreshLiveWorkspace();
+      return res.archived_count ?? 0;
+    }
+    const usedIds = new Set(movements.map((m) => m.productId));
+    const unused = products.filter((p) => !usedIds.has(p.id));
+    setProducts((prev) => prev.filter((p) => usedIds.has(p.id)));
+    return unused.length;
+  }, [isLiveBackend, movements, products, refreshLiveWorkspace]);
+
+  const enableDemoPreview = useCallback(() => {
+    setIsDemoMode(true);
+    setStore({
+      name: "Sharma Kirana & General Store",
+      ownerName: "Demo Owner",
+      city: "Jaipur, RJ",
+      timezone: "Asia/Kolkata",
+      tier: "free",
+      monthlyVoiceUsed: 12,
+      monthlyVoiceLimit: 250,
+    });
+    setProducts(INITIAL_PRODUCTS);
+    setCustomers(INITIAL_CUSTOMERS);
   }, []);
+
+  const signOut = useCallback(async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    setAuthUser(null);
+    setNeedsOnboarding(false);
+    setIsLiveBackend(false);
+    setIsDemoMode(false);
+    setStore({
+      name: "My Store",
+      ownerName: "",
+      city: "",
+      timezone: "Asia/Kolkata",
+      tier: "free",
+      monthlyVoiceUsed: 0,
+      monthlyVoiceLimit: 250,
+    });
+    setProducts([]);
+    setCustomers([]);
+    setMovements([]);
+    setSales([]);
+    setExpenses([]);
+    setConversations([
+      {
+        date: todayYmd,
+        label: "Today",
+        summary: "Ready for voice or text commands",
+        entries: [],
+      },
+    ]);
+  }, [todayYmd]);
 
   const addManualExpense = useCallback(
     (e: Omit<Expense, "id" | "operationId" | "createdAt" | "status">) => {
@@ -2737,6 +2624,14 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         confirmPendingHighValue,
         cancelPendingHighValue,
         isLiveBackend,
+        authUser,
+        needsOnboarding,
+        isDemoMode,
+        signOut,
+        refreshWorkspace: refreshLiveWorkspace,
+        archiveProduct,
+        clearUnusedCatalog,
+        enableDemoPreview,
         submitAudioTurn,
         submitCommand,
         selectClarificationCandidate,

@@ -270,6 +270,23 @@ class VoicePipelineService:
             customer_hints=customer_hints,
         )
 
+        # 4b. Zero-Assumption Background Noise / Low-Confidence Guard
+        if proposal.has_ambiguity_or_noise_conflict or proposal.confidence < 0.85:
+            clar_msg = (
+                proposal.clarification_question
+                or "Mujhe thoda confusion hai (background awaaz ya unclear intent ke kaaran). Kripya dubara confirm karein ki aap kya record karna chahte hain?"
+            )
+            res = VoiceTurnResult(
+                operation_id=operation_id,
+                status="needs_clarification",
+                transcript=clean_text,
+                reply=clar_msg,
+                language=proposal.detected_language,
+                clarification={"kind": "missing_slot", "prompt": clar_msg},
+            )
+            self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, clean_text, proposal.detected_language, stt_provider, stt_confidence, proposal.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
+            return res
+
         # 5. Execute parsed operations sequentially (supports single AND multi-command batch!)
         return await self._execute_operations_batch(
             operations=proposal.operations,
@@ -779,6 +796,21 @@ class VoicePipelineService:
             }
             return slip, reply
 
+        if intent == "archive_product" and product:
+            self.tx.archive_product(business_id=business_id, product_id=str(product["id"]))
+            reply = f"{product['name']} ko catalog se archive kar diya gaya hai (purane records safe rahenge)."
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "damage",
+                "title": f"Archived SKU · {product['name']}",
+                "subtitle": "Soft-archived from active catalog",
+                "transactionDate": txn_date,
+                "lines": [{"label": "Catalog Status", "value": "Archived", "tone": "neutral"}],
+                "status": "saved",
+            }
+            return slip, reply
+
         raise PolicyBlockedError("Unsupported draft payload")
 
     async def _execute_operations_batch(
@@ -808,6 +840,22 @@ class VoicePipelineService:
 
         for idx, op in enumerate(operations):
             SecurityPolicyEngine.assert_allowed_intent(op.intent)
+            if op.has_ambiguity_or_noise_conflict or op.confidence < 0.85:
+                clar_msg = (
+                    op.clarification_question
+                    or "Thoda confusion hai — kripya sahi product, customer, ya quantity dubara confirm karein."
+                )
+                res = VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="needs_clarification",
+                    transcript=raw_transcript,
+                    reply=clar_msg,
+                    language=language,  # type: ignore[arg-type]
+                    receipts=receipts,
+                    clarification={"kind": "missing_slot", "prompt": clar_msg},
+                )
+                return res
+
             sub_op_id = operation_id if idx == 0 and not prefix_receipts else str(uuid.uuid4())
             txn_date = resolve_relative_date(op.relative_date, tz_name)
             within_30d, days_ago = check_memory_window_days(txn_date, get_business_today(tz_name), 30)
@@ -828,7 +876,10 @@ class VoicePipelineService:
                 qres = self.queries.answer_query(
                     business_id=business_id,
                     topic=op.query_topic,
+                    product_query=op.product_query,
                     customer_query=op.customer_query,
+                    products=products,
+                    aliases=aliases,
                     timezone_name=tz_name,
                 )
                 replies.append(qres["reply"])
@@ -837,7 +888,7 @@ class VoicePipelineService:
                         "id": f"slip-{sub_op_id}",
                         "operationId": sub_op_id,
                         "kind": "query",
-                        "title": "Ledger Query Result",
+                        "title": "Stock Query Result" if op.query_topic == "stock_check" else "Ledger Query Result",
                         "subtitle": f"{txn_date_str} · Read-Only",
                         "transactionDate": txn_date_str,
                         "amountINR": qres["amount_inr"],
@@ -1116,6 +1167,242 @@ class VoicePipelineService:
                 )
                 receipts.append(slip)
                 replies.append(rep)
+
+            elif op.intent in {"create_customer", "update_customer", "record_udhaar_credit", "record_customer_payment"}:
+                if op.intent == "create_customer" and op.customer_query:
+                    new_c = self.tx.create_customer(
+                        business_id=business_id,
+                        name=op.customer_query,
+                        phone=op.phone or "",
+                        area_note=op.area_note or "",
+                        opening_balance=float(op.total_amount or 0),
+                    )
+                    customers.append(new_c)
+                    rep = f"Customer {new_c['name']} Khata mein add ho gaya hai."
+                    replies.append(rep)
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "payment",
+                            "title": f"Customer Added · {new_c['name']}",
+                            "subtitle": new_c.get("area_note") or "Khata Profile Created",
+                            "transactionDate": txn_date_str,
+                            "lines": [{"label": "Opening Balance", "value": f"₹{float(new_c['outstanding_balance']):,.0f}", "tone": "neutral"}],
+                            "status": "saved",
+                        }
+                    )
+                else:
+                    cres = resolve_customer(op.customer_query, customers)
+                    if cres.status == "ambiguous" and cres.candidates:
+                        names = " ya ".join(c["name"] for c in cres.candidates)
+                        msg = f"Khata mein {len(cres.candidates)} {op.customer_query} hain ({names}). Kaunse customer ke liye?"
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=msg,
+                            language=language,  # type: ignore[arg-type]
+                            receipts=receipts,
+                            clarification={
+                                "kind": "disambiguate_customer",
+                                "prompt": msg,
+                                "candidates": [
+                                    {"id": str(c["id"]), "label": c["name"], "meta": f"Due ₹{float(c['outstanding_balance']):,.0f}", "value": c["name"]}
+                                    for c in cres.candidates
+                                ],
+                            },
+                        )
+                    if cres.status != "exact" or not cres.customer:
+                        msg = f"'{op.customer_query}' Khata mein nahi mila. Kya naya customer add karun?"
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=msg,
+                            language=language,  # type: ignore[arg-type]
+                            receipts=receipts,
+                        )
+                    cust = cres.customer
+                    if op.intent == "update_customer":
+                        self.tx.update_customer(
+                            business_id=business_id,
+                            customer_id=str(cust["id"]),
+                            phone=op.phone,
+                            area_note=op.area_note,
+                        )
+                        rep = f"{cust['name']} ki Khata details update ho gayi hain."
+                        replies.append(rep)
+                    elif op.intent == "record_udhaar_credit":
+                        amt = float(op.total_amount or op.unit_price or 0)
+                        if amt <= 0:
+                            return VoiceTurnResult(
+                                operation_id=operation_id,
+                                status="needs_clarification",
+                                transcript=raw_transcript,
+                                reply=f"{cust['name']} ke khate mein kitne rupaye udhaar likhne hain?",
+                                language=language,  # type: ignore[arg-type]
+                            )
+                        ud = self.tx.record_direct_udhaar(
+                            business_id=business_id,
+                            user_id=user_id,
+                            customer_id=str(cust["id"]),
+                            amount=amt,
+                            transaction_date=txn_date_str,
+                            operation_id=sub_op_id,
+                            notes=op.description or "Voice Khata entry",
+                        )
+                        rep = f"{cust['name']} ke khate mein ₹{amt:,.0f} udhaar likh diya gaya (Balance ₹{ud['after_balance']:,.0f})."
+                        replies.append(rep)
+                        receipts.append(
+                            {
+                                "id": f"slip-{sub_op_id}",
+                                "operationId": sub_op_id,
+                                "kind": "sale",
+                                "title": f"Khata Udhaar · {cust['name']}",
+                                "subtitle": "Direct Credit Entry",
+                                "transactionDate": txn_date_str,
+                                "amountINR": amt,
+                                "lines": [{"label": "New Balance", "value": f"₹{ud['after_balance']:,.0f}", "tone": "ochre"}],
+                                "status": "saved",
+                            }
+                        )
+                    elif op.intent == "record_customer_payment":
+                        amt = float(op.total_amount or op.paid_amount or op.unit_price or 0)
+                        if amt <= 0:
+                            return VoiceTurnResult(
+                                operation_id=operation_id,
+                                status="needs_clarification",
+                                transcript=raw_transcript,
+                                reply=f"{cust['name']} se kitne rupaye receive hue?",
+                                language=language,  # type: ignore[arg-type]
+                            )
+                        pay = self.tx.record_customer_payment(
+                            business_id=business_id,
+                            user_id=user_id,
+                            customer_id=str(cust["id"]),
+                            amount=amt,
+                            payment_method=op.payment_method or "cash",
+                            transaction_date=txn_date_str,
+                            operation_id=sub_op_id,
+                        )
+                        rep = f"{cust['name']} se ₹{amt:,.0f} receive ho gaya. Remaining balance: ₹{pay['after_balance']:,.0f}."
+                        replies.append(rep)
+                        receipts.append(
+                            {
+                                "id": f"slip-{sub_op_id}",
+                                "operationId": sub_op_id,
+                                "kind": "payment",
+                                "title": f"Payment Received · {cust['name']}",
+                                "subtitle": f"Via {(op.payment_method or 'cash').upper()}",
+                                "transactionDate": txn_date_str,
+                                "amountINR": amt,
+                                "lines": [{"label": "Remaining Balance", "value": f"₹{pay['after_balance']:,.0f}", "tone": "sage"}],
+                                "status": "saved",
+                            }
+                        )
+
+            elif op.intent == "update_product_settings":
+                if not op.product_query:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply="Kis product ka price ya low-stock limit update karna hai?",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                pres = resolve_product(op.product_query, products, aliases)
+                if pres.status == "ambiguous":
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"'{op.product_query}' mein multiple items mile. Kaunsa item update karna hai?",
+                        language=language,  # type: ignore[arg-type]
+                        clarification={
+                            "kind": "disambiguate_product",
+                            "prompt": f"Select item for '{op.product_query}'",
+                            "options": [{"id": str(c["id"]), "label": c["name"], "value": c["name"]} for c in pres.candidates],
+                        },
+                    )
+                if pres.status in {"exact", "verify_alias"} and pres.product:
+                    p = pres.product
+                    self.tx.update_product_settings(
+                        business_id=business_id,
+                        product_id=str(p["id"]),
+                        cost_price=op.cost_price,
+                        selling_price=op.unit_price,
+                        low_stock_threshold=op.low_stock_threshold,
+                    )
+                    rep = f"{p['name']} ki settings update ho gayi hain."
+                    replies.append(rep)
+                else:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"'{op.product_query}' inventory mein nahi mila. Kripya sahi naam bolein.",
+                        language=language,  # type: ignore[arg-type]
+                    )
+
+            elif op.intent == "archive_product":
+                if not op.product_query:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply="Kis item ko catalog se archive karna hai?",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                pres = resolve_product(op.product_query, products, aliases)
+                if pres.status == "ambiguous":
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"'{op.product_query}' mein multiple variants hain. Kaunse item ko archive karna hai?",
+                        language=language,  # type: ignore[arg-type]
+                        clarification={
+                            "kind": "disambiguate_product",
+                            "prompt": f"Kaunsa '{op.product_query}' archive karna hai?",
+                            "options": [{"id": str(c["id"]), "label": c["name"], "value": c["name"]} for c in pres.candidates],
+                        },
+                    )
+                if pres.status not in {"exact", "verify_alias"} or not pres.product:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"'{op.product_query}' catalog mein nahi mila.",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                p = pres.product
+                draft = {
+                    "intent": "archive_product",
+                    "product_id": str(p["id"]),
+                    "transaction_date": txn_date_str,
+                }
+                token = self.tx.issue_confirmation_token(
+                    business_id=business_id,
+                    user_id=user_id,
+                    operation_id=operation_id,
+                    draft_payload=draft,
+                    risk_reason=f"Archive SKU {p['name']} from active catalog",
+                )
+                return VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="needs_confirmation",
+                    transcript=raw_transcript,
+                    reply=f"Confirm karein: Kya aap '{p['name']}' ko active inventory catalog se archive karna chahte hain?",
+                    language=language,  # type: ignore[arg-type]
+                    confirmation_token=token,
+                    confirmation_summary={
+                        "title": f"Archive {p['name']}",
+                        "subtitle": "Soft-archive only (ledger history stays intact)",
+                        "amount_inr": 0,
+                        "reason": "Catalog visibility change requires owner confirmation",
+                    },
+                )
 
         final_reply = " ".join(replies) if replies else "Kripya item aur quantity saaf bolein."
         status_out = "query_answered" if all(r.get("kind") == "query" for r in receipts) and receipts else "executed"

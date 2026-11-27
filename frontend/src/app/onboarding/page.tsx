@@ -63,11 +63,12 @@ const PLANS: {
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { store, setStoreTier, updateStoreProfile } = useCueWorkspace();
+  const { store, authUser, setStoreTier, updateStoreProfile, refreshWorkspace } = useCueWorkspace();
   const [selectedTier, setSelectedTier] = useState<SubscriptionTierCode>(store.tier);
-  const [storeName, setStoreName] = useState(store.name);
-  const [ownerName, setOwnerName] = useState(store.ownerName);
-  const [city, setCity] = useState(store.city);
+  const [storeName, setStoreName] = useState(store.name === "My Store" ? "" : store.name);
+  const [ownerName, setOwnerName] = useState(authUser?.name || store.ownerName || "");
+  const [city, setCity] = useState(store.city || "");
+  const [seedSampleCatalog, setSeedSampleCatalog] = useState(false);
 
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,8 +82,9 @@ export default function OnboardingPage() {
             name: storeName,
             city,
             plan_code: selectedTier,
-            seed_sample_catalog: true,
+            seed_sample_catalog: seedSampleCatalog,
           });
+          await refreshWorkspace();
         }
       }
     } catch {
@@ -194,6 +196,7 @@ export default function OnboardingPage() {
               <input
                 type="text"
                 required
+                placeholder="e.g. Gupta Kirana Store"
                 value={storeName}
                 onChange={(e) => setStoreName(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-paper border border-rule focus:outline-none focus:border-ink"
@@ -206,6 +209,7 @@ export default function OnboardingPage() {
               <input
                 type="text"
                 required
+                placeholder="e.g. Nitin Sharma"
                 value={ownerName}
                 onChange={(e) => setOwnerName(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-paper border border-rule focus:outline-none focus:border-ink"
@@ -218,12 +222,25 @@ export default function OnboardingPage() {
               <input
                 type="text"
                 required
+                placeholder="e.g. Delhi"
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-paper border border-rule focus:outline-none focus:border-ink"
               />
             </div>
           </div>
+
+          <label className="mt-4 flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={seedSampleCatalog}
+              onChange={(e) => setSeedSampleCatalog(e.target.checked)}
+              className="rounded border-rule text-vermilion focus:ring-vermilion"
+            />
+            <span>
+              Load sample kirana catalog (Pepsi, Maggi, Tata Salt) for testing — leave unchecked for an empty store
+            </span>
+          </label>
 
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-ink-muted">

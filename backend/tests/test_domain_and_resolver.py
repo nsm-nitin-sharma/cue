@@ -1,7 +1,9 @@
 from datetime import date
 
+from app.core.policy import PolicyBlockedError, SecurityPolicyEngine
 from app.core.time_utils import check_memory_window_days, detect_over_30_day_reference
 from app.domain.indian_numbers import extract_post_negation_number, parse_indian_number
+from app.domain.schemas.intents import IntentProposal, VoiceOperationItem
 from app.domain.unit_converter import convert_to_base_quantity
 from app.providers.llm.gemini import deterministic_fallback_parse
 from app.services.entity_resolver import (
@@ -9,6 +11,7 @@ from app.services.entity_resolver import (
     resolve_product,
     resolve_short_variant_reply,
 )
+from app.services.query_engine import QueryEngine
 
 PRODUCTS = [
     {"id": "p1", "name": "Pepsi 500ml", "base_unit": "piece"},
@@ -93,3 +96,49 @@ def test_multi_command_single_breath_parsing():
     assert proposal.operations[0].quantity == 20
     assert proposal.operations[1].quantity == 10
     assert proposal.operations[2].quantity == 5
+
+
+def test_intent_priority_noise_guard_and_crud_intents():
+    noisy = IntentProposal(
+        detected_language="hinglish",
+        confidence=0.62,
+        has_ambiguity_or_noise_conflict=True,
+        clarification_question="Background mein doosri awaaz aayi — kya aap 20 Maggi bikne ki baat kar rahe hain?",
+        operations=[VoiceOperationItem(intent="record_sale", product_query="Maggi", quantity=20)],
+    )
+    assert noisy.has_ambiguity_or_noise_conflict is True
+    assert noisy.confidence < 0.85
+    assert noisy.clarification_question is not None
+
+    for intent in [
+        "create_customer",
+        "update_customer",
+        "record_udhaar_credit",
+        "update_product_settings",
+        "archive_product",
+    ]:
+        SecurityPolicyEngine.assert_allowed_intent(intent)
+
+    try:
+        SecurityPolicyEngine.assert_allowed_intent("delete_database")
+        assert False, "Expected PolicyBlockedError for destructive intent"
+    except PolicyBlockedError:
+        pass
+
+
+def test_query_engine_stock_check():
+    qe = QueryEngine(db=None)
+    stock_products = [
+        {"id": "p4", "name": "Maggi Masala 70g", "base_unit": "packet", "current_stock": 28, "low_stock_threshold": 15, "default_selling_price": 14},
+    ]
+    res = qe.answer_query(
+        business_id="b1",
+        topic="stock_check",
+        product_query="maggi",
+        products=stock_products,
+        aliases=ALIASES,
+    )
+    assert "28 packet Maggi Masala 70g" in res["reply"]
+
+    empty_res = qe.answer_query(business_id="b1", topic="stock_check", products=[])
+    assert "khaali" in empty_res["reply"].lower()

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Search, Plus, Tag, ArrowDownUp } from "lucide-react";
+import { Search, Plus, Tag, ArrowDownUp, Archive, Sparkles } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPill, Amount } from "@/components/ui/LedgerPrimitives";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
@@ -9,10 +9,11 @@ import { formatShortOp } from "@/lib/format";
 import type { BaseUnit } from "@/types/cue";
 
 export default function InventoryPage() {
-  const { products, movements, addManualProduct } = useCueWorkspace();
+  const { products, movements, addManualProduct, archiveProduct, clearUnusedCatalog } = useCueWorkspace();
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<"stock" | "movements">("stock");
   const [showAdd, setShowAdd] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [category, setCategory] = useState("Beverages");
@@ -91,6 +92,25 @@ export default function InventoryPage() {
                 </button>
               </div>
 
+              {products.length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const count = await clearUnusedCatalog();
+                    setActionMsg(
+                      count > 0
+                        ? `Removed ${count} unused catalog item${count === 1 ? "" : "s"}.`
+                        : "Only items with stock history remain — use Archive on individual rows if needed."
+                    );
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-paper-elevated border border-rule hover:border-rule-strong text-ink-secondary hover:text-ink transition-colors"
+                  title="Remove unused preloaded sample items without transaction history"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-ochre" />
+                  Clear Unused Items
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowAdd((v) => !v)}
@@ -101,6 +121,19 @@ export default function InventoryPage() {
               </button>
             </div>
           </div>
+
+          {actionMsg && (
+            <div className="px-4 py-2.5 rounded-xl bg-paper-elevated border border-rule text-xs text-ink-secondary flex items-center justify-between">
+              <span>{actionMsg}</span>
+              <button
+                type="button"
+                onClick={() => setActionMsg(null)}
+                className="text-ink-muted hover:text-ink text-[11px] font-mono"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {showAdd && (
             <form
@@ -193,9 +226,17 @@ export default function InventoryPage() {
                       <th className="py-3 px-4 text-right">Selling</th>
                       <th className="py-3 px-4 text-right">In Stock</th>
                       <th className="py-3 px-4 text-right">Health</th>
+                      <th className="py-3 px-4 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-rule text-sm">
+                    {filteredProducts.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-10 px-4 text-center text-xs text-ink-muted">
+                          Your inventory is empty. Add your first item above or speak to Cue: &ldquo;20 Maggi 14 ke rate par aayi&rdquo;.
+                        </td>
+                      </tr>
+                    )}
                     {filteredProducts.map((p) => {
                       const low = p.stock <= p.lowStockThreshold;
                       return (
@@ -233,6 +274,17 @@ export default function InventoryPage() {
                             <StatusPill tone={low ? "crimson" : "sage"}>
                               {low ? "Low Stock" : "Healthy"}
                             </StatusPill>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => archiveProduct(p.id)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] text-ink-muted hover:text-crimson hover:bg-paper border border-transparent hover:border-rule transition-colors"
+                              title={`Archive ${p.name}`}
+                            >
+                              <Archive className="w-3 h-3" />
+                              Archive
+                            </button>
                           </td>
                         </tr>
                       );

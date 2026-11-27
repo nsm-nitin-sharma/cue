@@ -37,7 +37,7 @@ CREATE OR REPLACE FUNCTION public.rpc_onboard_business(
     p_name TEXT,
     p_city TEXT,
     p_plan_code TEXT DEFAULT 'free',
-    p_seed_sample_catalog BOOLEAN DEFAULT TRUE
+    p_seed_sample_catalog BOOLEAN DEFAULT FALSE
 )
 RETURNS JSONB
 LANGUAGE plpgsql

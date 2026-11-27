@@ -15,7 +15,10 @@ import {
   AlertTriangle,
   Crown,
   LogIn,
+  LogOut,
   Mic,
+  Store,
+  UserCheck,
 } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { formatINR } from "@/lib/format";
@@ -59,6 +62,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     confirmPendingHighValue,
     cancelPendingHighValue,
     isLiveBackend,
+    authUser,
+    needsOnboarding,
+    isDemoMode,
+    signOut,
+    enableDemoPreview,
   } = useCueWorkspace();
 
   const tierLabel =
@@ -124,15 +132,46 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           )}
 
+          {authUser ? (
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-paper border border-rule">
+              <UserCheck className="w-3.5 h-3.5 text-sage shrink-0" />
+              <span className="hidden sm:inline max-w-[130px] truncate font-medium text-ink" title={authUser.email}>
+                {authUser.name}
+              </span>
+              {store.name && store.name !== "My Store" && (
+                <span className="hidden xl:inline text-[11px] text-ink-muted truncate max-w-[120px]">
+                  · {store.name}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => signOut()}
+                className="ml-1 inline-flex items-center gap-1 text-[11px] text-ink-muted hover:text-crimson transition-colors"
+                title="Sign out"
+              >
+                <LogOut className="w-3 h-3" />
+                <span className="hidden lg:inline">Sign Out</span>
+              </button>
+            </div>
+          ) : (
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-ink text-paper-elevated hover:bg-vermilion transition-colors"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Sign In</span>
+            </Link>
+          )}
+
           <button
             type="button"
             onClick={() => setRegisterOpen(true)}
             className="inline-flex items-center gap-2.5 px-3 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
-            title={isLiveBackend ? "Connected to Supabase + Groq Whisper + Gemini" : "Local Preview Mode — Sign in at /login for Live AI"}
+            title={isLiveBackend ? "Connected to Supabase + Groq Whisper + Gemini" : "Local Mode — Sign in for Live AI"}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? "bg-sage" : "bg-ochre"}`} />
             <span className="hidden lg:inline text-[10px] font-mono uppercase tracking-wider text-ink-muted">
-              {isLiveBackend ? "AI Live" : "Preview"}
+              {isLiveBackend ? "AI Live" : isDemoMode ? "Demo" : "Local"}
             </span>
             <span className="font-mono tabular-nums font-semibold text-ink">
               {formatINR(todayStats.salesTotal)}
@@ -146,6 +185,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </header>
+
+      {authUser && needsOnboarding && pathname !== "/onboarding" && (
+        <div className="px-4 sm:px-8 py-2 bg-ochre-soft border-b border-ochre/25 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="text-ink inline-flex items-center gap-1.5">
+            <Store className="w-3.5 h-3.5 text-ochre" />
+            Signed in as <strong>{authUser.email}</strong> — complete your store profile to enable live cloud sync.
+          </span>
+          <Link
+            href="/onboarding"
+            className="px-3 py-1 rounded-md bg-ink text-paper-elevated font-medium hover:bg-vermilion transition-colors"
+          >
+            Set Up Store
+          </Link>
+        </div>
+      )}
+
+      {!authUser && !isDemoMode && (
+        <div className="px-4 sm:px-8 py-1.5 bg-paper-subtle border-b border-rule flex flex-wrap items-center justify-between gap-2 text-[11px] text-ink-secondary">
+          <span>Clean workspace ready. Sign in to connect your live AI store, or load sample kirana items to explore.</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={enableDemoPreview}
+              className="px-2.5 py-0.5 rounded border border-rule bg-paper-elevated hover:border-rule-strong text-ink font-medium"
+            >
+              Load Sample Items
+            </button>
+            <Link href="/login" className="text-vermilion font-medium hover:underline">
+              Sign In →
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Mobile Compact Route Strip */}
       <div className="md:hidden flex items-center gap-1 px-4 py-2 overflow-x-auto no-scrollbar border-b border-rule bg-paper-elevated">
@@ -409,14 +481,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Crown className="w-3.5 h-3.5 text-ochre" />
                 Plans ({tierLabel})
               </Link>
-              <Link
-                href="/login"
-                onClick={() => setRegisterOpen(false)}
-                className="flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium bg-ink text-paper-elevated"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                Account
-              </Link>
+              {authUser ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRegisterOpen(false);
+                    signOut();
+                  }}
+                  className="flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium bg-ink text-paper-elevated hover:bg-crimson transition-colors"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Sign Out
+                </button>
+              ) : (
+                <Link
+                  href="/login"
+                  onClick={() => setRegisterOpen(false)}
+                  className="flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium bg-ink text-paper-elevated"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  Sign In
+                </Link>
+              )}
             </div>
           </div>
         </div>

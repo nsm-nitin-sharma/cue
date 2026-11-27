@@ -417,3 +417,166 @@ class TransactionEngine:
             {"consumed_at": datetime.now(timezone.utc).isoformat()}
         ).eq("id", row["id"]).execute()
         return row["proposed_action"]
+
+    def create_customer(
+        self,
+        *,
+        business_id: str,
+        name: str,
+        phone: str = "",
+        area_note: str = "",
+        opening_balance: float = 0.0,
+    ) -> dict[str, Any]:
+        norm = " ".join(name.lower().split())
+        res = (
+            self.db.table("customers")
+            .insert(
+                {
+                    "business_id": business_id,
+                    "name": name.strip(),
+                    "normalized_name": norm,
+                    "phone": phone.strip(),
+                    "area_note": area_note.strip(),
+                    "outstanding_balance": max(0.0, opening_balance),
+                }
+            )
+            .execute()
+        )
+        return res.data[0]
+
+    def update_customer(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+        phone: str | None = None,
+        area_note: str | None = None,
+    ) -> dict[str, Any]:
+        patch: dict[str, Any] = {"updated_at": "now()"}
+        if phone is not None:
+            patch["phone"] = phone.strip()
+        if area_note is not None:
+            patch["area_note"] = area_note.strip()
+        res = (
+            self.db.table("customers")
+            .update(patch)
+            .eq("id", customer_id)
+            .eq("business_id", business_id)
+            .execute()
+        )
+        return res.data[0]
+
+    def record_direct_udhaar(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        customer_id: str,
+        amount: float,
+        transaction_date: str,
+        operation_id: str,
+        notes: str = "Direct Khata udhaar",
+    ) -> dict[str, Any]:
+        cust = (
+            self.db.table("customers")
+            .select("outstanding_balance")
+            .eq("id", customer_id)
+            .eq("business_id", business_id)
+            .limit(1)
+            .execute()
+            .data[0]
+        )
+        before_bal = float(cust["outstanding_balance"] or 0)
+        after_bal = before_bal + amount
+        self.db.table("customers").update(
+            {"outstanding_balance": after_bal, "updated_at": "now()"}
+        ).eq("id", customer_id).eq("business_id", business_id).execute()
+
+        sale = (
+            self.db.table("sales")
+            .insert(
+                {
+                    "business_id": business_id,
+                    "customer_id": customer_id,
+                    "total_amount": amount,
+                    "paid_amount": 0,
+                    "payment_status": "credit",
+                    "transaction_date": transaction_date,
+                    "status": "active",
+                    "operation_id": operation_id,
+                    "notes": notes,
+                    "created_by": user_id,
+                }
+            )
+            .execute()
+        )
+        return {"sale_id": sale.data[0]["id"], "before_balance": before_bal, "after_balance": after_bal}
+
+    def update_product_settings(
+        self,
+        *,
+        business_id: str,
+        product_id: str,
+        cost_price: float | None = None,
+        selling_price: float | None = None,
+        low_stock_threshold: float | None = None,
+    ) -> dict[str, Any]:
+        patch: dict[str, Any] = {"updated_at": "now()"}
+        if cost_price is not None:
+            patch["default_cost_price"] = cost_price
+        if selling_price is not None:
+            patch["default_selling_price"] = selling_price
+        if low_stock_threshold is not None:
+            patch["low_stock_threshold"] = low_stock_threshold
+        res = (
+            self.db.table("products")
+            .update(patch)
+            .eq("id", product_id)
+            .eq("business_id", business_id)
+            .execute()
+        )
+        return res.data[0]
+
+    def archive_product(self, *, business_id: str, product_id: str) -> None:
+        self.db.table("products").update({"is_active": False, "updated_at": "now()"}).eq(
+            "id", product_id
+        ).eq("business_id", business_id).execute()
+
+    def archive_unused_products(self, *, business_id: str) -> int:
+        prods = (
+            self.db.table("products")
+            .select("id")
+            .eq("business_id", business_id)
+            .eq("is_active", True)
+            .execute()
+            .data
+            or []
+        )
+        if not prods:
+            return 0
+        mv_rows = (
+            self.db.table("inventory_movements")
+            .select("product_id")
+            .eq("business_id", business_id)
+            .execute()
+            .data
+            or []
+        )
+        si_rows = (
+            self.db.table("sale_items")
+            .select("product_id")
+            .eq("business_id", business_id)
+            .execute()
+            .data
+            or []
+        )
+        used_ids = {str(r["product_id"]) for r in mv_rows if r.get("product_id")} | {
+            str(r["product_id"]) for r in si_rows if r.get("product_id")
+        }
+        unused_ids = [str(p["id"]) for p in prods if str(p["id"]) not in used_ids]
+        if not unused_ids:
+            return 0
+        self.db.table("products").update({"is_active": False, "updated_at": "now()"}).eq(
+            "business_id", business_id
+        ).in_("id", unused_ids).execute()
+        return len(unused_ids)
