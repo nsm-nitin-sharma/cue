@@ -24,6 +24,9 @@ import {
   sendTextCommandRemote,
   sendVoiceAudioTurn,
   syncOfflineBatchRemote,
+  updateCustomerRemote,
+  updateExpenseRemote,
+  updateProductRemote,
 } from "@/lib/api";
 import type {
   BaseUnit,
@@ -120,7 +123,10 @@ interface CueWorkspaceContextValue {
   undoReceipt: (operationId: string) => void;
   syncOfflineQueue: () => Promise<void>;
   addManualProduct: (p: Omit<Product, "id">) => void;
+  updateProduct: (productId: string, patch: Partial<Omit<Product, "id">>) => Promise<void>;
   addManualExpense: (e: Omit<Expense, "id" | "operationId" | "createdAt" | "status">) => void;
+  updateExpense: (expenseId: string, patch: Partial<Omit<Expense, "id" | "operationId" | "createdAt" | "status">>) => Promise<void>;
+  updateCustomer: (customerId: string, patch: Partial<Pick<Customer, "name" | "phone" | "areaNote">>) => Promise<void>;
   recordManualCustomerPayment: (customerId: string, amount: number, method: "cash" | "upi" | "bank") => void;
   todayStats: {
     salesTotal: number;
@@ -2458,6 +2464,61 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     [isLiveBackend, refreshLiveWorkspace]
   );
 
+  const updateProduct = useCallback(
+    async (productId: string, patch: Partial<Omit<Product, "id">>) => {
+      if (isLiveBackend && !isOffline) {
+        await updateProductRemote(productId, {
+          name: patch.name,
+          category: patch.category,
+          base_unit: patch.baseUnit,
+          cost_price: patch.costPrice,
+          selling_price: patch.sellingPrice,
+          stock: patch.stock,
+          low_stock_threshold: patch.lowStockThreshold,
+          aliases: patch.aliases,
+        });
+        await refreshLiveWorkspace();
+        return;
+      }
+      setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, ...patch } : p)));
+    },
+    [isLiveBackend, isOffline, refreshLiveWorkspace]
+  );
+
+  const updateCustomer = useCallback(
+    async (customerId: string, patch: Partial<Pick<Customer, "name" | "phone" | "areaNote">>) => {
+      if (isLiveBackend && !isOffline) {
+        await updateCustomerRemote(customerId, {
+          name: patch.name,
+          phone: patch.phone,
+          area_note: patch.areaNote,
+        });
+        await refreshLiveWorkspace();
+        return;
+      }
+      setCustomers((prev) => prev.map((c) => (c.id === customerId ? { ...c, ...patch } : c)));
+    },
+    [isLiveBackend, isOffline, refreshLiveWorkspace]
+  );
+
+  const updateExpense = useCallback(
+    async (expenseId: string, patch: Partial<Omit<Expense, "id" | "operationId" | "createdAt" | "status">>) => {
+      if (isLiveBackend && !isOffline) {
+        await updateExpenseRemote(expenseId, {
+          category: patch.category,
+          description: patch.description,
+          amount: patch.amount,
+          payment_method: patch.paymentMethod,
+          transaction_date: patch.transactionDate,
+        });
+        await refreshLiveWorkspace();
+        return;
+      }
+      setExpenses((prev) => prev.map((e) => (e.id === expenseId ? { ...e, ...patch } : e)));
+    },
+    [isLiveBackend, isOffline, refreshLiveWorkspace]
+  );
+
   const archiveProduct = useCallback(
     async (productId: string) => {
       if (isLiveBackend) {
@@ -2722,7 +2783,10 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         undoReceipt,
         syncOfflineQueue,
         addManualProduct,
+        updateProduct,
         addManualExpense,
+        updateExpense,
+        updateCustomer,
         recordManualCustomerPayment,
         todayStats,
       }}

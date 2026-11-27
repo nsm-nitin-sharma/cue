@@ -167,6 +167,31 @@ class ManualCustomerPaymentRequest(StrictModel):
     payment_method: Literal["cash", "upi", "bank"] = "cash"
 
 
+class UpdateProductRequest(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    category: str | None = Field(default=None, max_length=64)
+    base_unit: Literal["piece", "packet", "kg", "litre", "box"] | None = None
+    cost_price: float | None = Field(default=None, ge=0, le=1000000)
+    selling_price: float | None = Field(default=None, ge=0, le=1000000)
+    stock: float | None = Field(default=None, ge=0, le=100000)
+    low_stock_threshold: float | None = Field(default=None, ge=0, le=1000)
+    aliases: list[str] | None = Field(default=None, max_length=20)
+
+
+class UpdateCustomerRequest(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
+    area_note: str | None = Field(default=None, max_length=120)
+
+
+class UpdateExpenseRequest(StrictModel):
+    category: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, min_length=1, max_length=240)
+    amount: float | None = Field(default=None, gt=0, le=1000000)
+    payment_method: Literal["cash", "upi", "bank", "credit"] | None = None
+    transaction_date: str | None = None
+
+
 class VoiceTurnResult(BaseModel):
     operation_id: str
     status: Literal[

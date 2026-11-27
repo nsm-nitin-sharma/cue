@@ -1,18 +1,20 @@
 "use client";
 
 import React, { useState } from "react";
-import { Search, Plus, Tag, ArrowDownUp, Archive, Sparkles } from "lucide-react";
+import { Search, Plus, Tag, ArrowDownUp, Archive, Sparkles, Pencil, X } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusPill, Amount } from "@/components/ui/LedgerPrimitives";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { formatShortOp } from "@/lib/format";
-import type { BaseUnit } from "@/types/cue";
+import type { BaseUnit, Product } from "@/types/cue";
 
 export default function InventoryPage() {
-  const { products, movements, addManualProduct, archiveProduct, clearUnusedCatalog } = useCueWorkspace();
+  const { products, movements, addManualProduct, updateProduct, archiveProduct, clearUnusedCatalog } =
+    useCueWorkspace();
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<"stock" | "movements">("stock");
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const [name, setName] = useState("");
@@ -21,6 +23,7 @@ export default function InventoryPage() {
   const [costPrice, setCostPrice] = useState("20");
   const [sellingPrice, setSellingPrice] = useState("25");
   const [stock, setStock] = useState("10");
+  const [lowThreshold, setLowThreshold] = useState("5");
   const [aliases, setAliases] = useState("");
 
   const filteredProducts = products.filter(
@@ -30,26 +33,65 @@ export default function InventoryPage() {
       p.category.toLowerCase().includes(query.toLowerCase())
   );
 
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    addManualProduct({
-      skuCode: `SKU-${Math.floor(100 + Math.random() * 899)}`,
-      name: name.trim(),
-      category,
-      baseUnit,
-      costPrice: Number(costPrice) || 0,
-      sellingPrice: Number(sellingPrice) || 0,
-      stock: Number(stock) || 0,
-      lowStockThreshold: 5,
-      aliases: aliases
-        .split(",")
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean),
-    });
+  const resetForm = () => {
+    setEditingId(null);
     setName("");
+    setCategory("Beverages");
+    setBaseUnit("piece");
+    setCostPrice("20");
+    setSellingPrice("25");
+    setStock("10");
+    setLowThreshold("5");
     setAliases("");
     setShowAdd(false);
+  };
+
+  const openEditProduct = (p: Product) => {
+    setEditingId(p.id);
+    setName(p.name);
+    setCategory(p.category);
+    setBaseUnit(p.baseUnit);
+    setCostPrice(String(p.costPrice));
+    setSellingPrice(String(p.sellingPrice));
+    setStock(String(p.stock));
+    setLowThreshold(String(p.lowStockThreshold));
+    setAliases(p.aliases.join(", "));
+    setShowAdd(true);
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    const parsedAliases = aliases
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (editingId) {
+      await updateProduct(editingId, {
+        name: name.trim(),
+        category,
+        baseUnit,
+        costPrice: Number(costPrice) || 0,
+        sellingPrice: Number(sellingPrice) || 0,
+        stock: Number(stock) || 0,
+        lowStockThreshold: Number(lowThreshold) || 5,
+        aliases: parsedAliases,
+      });
+      setActionMsg(`Updated ${name.trim()}.`);
+    } else {
+      addManualProduct({
+        skuCode: `SKU-${Math.floor(100 + Math.random() * 899)}`,
+        name: name.trim(),
+        category,
+        baseUnit,
+        costPrice: Number(costPrice) || 0,
+        sellingPrice: Number(sellingPrice) || 0,
+        stock: Number(stock) || 0,
+        lowStockThreshold: Number(lowThreshold) || 5,
+        aliases: parsedAliases,
+      });
+    }
+    resetForm();
   };
 
   return (
@@ -113,7 +155,7 @@ export default function InventoryPage() {
 
               <button
                 type="button"
-                onClick={() => setShowAdd((v) => !v)}
+                onClick={() => (showAdd ? resetForm() : setShowAdd(true))}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium bg-ink hover:bg-vermilion text-white transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -138,8 +180,21 @@ export default function InventoryPage() {
           {showAdd && (
             <form
               onSubmit={handleCreate}
-              className="bg-paper-elevated border border-rule-strong rounded-2xl p-5 shadow-slip grid grid-cols-1 sm:grid-cols-6 gap-3 animate-slip-in"
+              className="bg-paper-elevated border border-rule-strong rounded-2xl p-5 shadow-slip grid grid-cols-1 sm:grid-cols-6 gap-3 animate-panel-expand"
             >
+              <div className="sm:col-span-6 flex items-center justify-between">
+                <span className="text-xs font-semibold text-ink">
+                  {editingId ? "Edit Inventory Product" : "Add New Inventory Product"}
+                </span>
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="p-1 rounded-md text-ink-muted hover:text-ink"
+                  aria-label="Close product form"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
               <input
                 type="text"
                 required
@@ -182,9 +237,16 @@ export default function InventoryPage() {
               />
               <input
                 type="number"
-                placeholder="Opening Qty"
+                placeholder={editingId ? "Current Stock" : "Opening Qty"}
                 value={stock}
                 onChange={(e) => setStock(e.target.value)}
+                className="px-3 py-2 text-sm font-mono rounded-xl bg-paper border border-rule"
+              />
+              <input
+                type="number"
+                placeholder="Low Stock Limit"
+                value={lowThreshold}
+                onChange={(e) => setLowThreshold(e.target.value)}
                 className="px-3 py-2 text-sm font-mono rounded-xl bg-paper border border-rule"
               />
               <input
@@ -192,13 +254,13 @@ export default function InventoryPage() {
                 placeholder="Aliases (comma separated)"
                 value={aliases}
                 onChange={(e) => setAliases(e.target.value)}
-                className="sm:col-span-4 px-3 py-2 text-sm rounded-xl bg-paper border border-rule"
+                className="sm:col-span-3 px-3 py-2 text-sm rounded-xl bg-paper border border-rule"
               />
               <button
                 type="submit"
-                className="px-4 py-2 rounded-xl text-xs font-medium bg-ink text-paper-elevated hover:bg-ink/90"
+                className="px-4 py-2 rounded-xl text-xs font-medium bg-ink text-paper-elevated hover:bg-vermilion transition-colors"
               >
-                Save Item
+                {editingId ? "Save Changes" : "Save Item"}
               </button>
             </form>
           )}
@@ -276,15 +338,26 @@ export default function InventoryPage() {
                             </StatusPill>
                           </td>
                           <td className="py-3.5 px-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => archiveProduct(p.id)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] text-ink-muted hover:text-crimson hover:bg-paper border border-transparent hover:border-rule transition-colors"
-                              title={`Archive ${p.name}`}
-                            >
-                              <Archive className="w-3 h-3" />
-                              Archive
-                            </button>
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => openEditProduct(p)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] text-ink-muted hover:text-ink hover:bg-paper border border-transparent hover:border-rule transition-colors"
+                                title={`Edit ${p.name}`}
+                              >
+                                <Pencil className="w-3 h-3" />
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => archiveProduct(p.id)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] text-ink-muted hover:text-crimson hover:bg-paper border border-transparent hover:border-rule transition-colors"
+                                title={`Archive ${p.name}`}
+                              >
+                                <Archive className="w-3 h-3" />
+                                Archive
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );

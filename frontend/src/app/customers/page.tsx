@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { IndianRupee, Check } from "lucide-react";
+import { IndianRupee, Check, Pencil } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Amount, StatusPill } from "@/components/ui/LedgerPrimitives";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
@@ -9,10 +9,33 @@ import { formatTimeIST } from "@/lib/format";
 import type { Customer } from "@/types/cue";
 
 export default function CustomersPage() {
-  const { customers, sales, recordManualCustomerPayment, todayStats } = useCueWorkspace();
+  const { customers, sales, recordManualCustomerPayment, updateCustomer, todayStats } = useCueWorkspace();
   const [activeCustomer, setActiveCustomer] = useState<Customer | null>(null);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editArea, setEditArea] = useState("");
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState<"cash" | "upi" | "bank">("cash");
+
+  const openEdit = (c: Customer) => {
+    setActiveCustomer(null);
+    setEditingCustomer(c);
+    setEditName(c.name);
+    setEditPhone(c.phone ?? "");
+    setEditArea(c.areaNote ?? "");
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCustomer || !editName.trim()) return;
+    await updateCustomer(editingCustomer.id, {
+      name: editName.trim(),
+      phone: editPhone.trim(),
+      areaNote: editArea.trim(),
+    });
+    setEditingCustomer(null);
+  };
 
   const handleCollect = (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,19 +113,31 @@ export default function CustomersPage() {
                           }`}
                         />
                       </div>
-                      {c.outstandingBalance > 0 && (
+                      <div className="flex items-center justify-end gap-1.5">
                         <button
                           type="button"
-                          onClick={() => {
-                            setActiveCustomer(c);
-                            setPayAmount(String(c.outstandingBalance));
-                          }}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium bg-ink text-paper-elevated hover:bg-ink/90 transition-colors"
+                          onClick={() => openEdit(c)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-paper border border-rule text-ink-secondary hover:text-ink hover:border-rule-strong transition-colors"
+                          title={`Edit ${c.name}`}
                         >
-                          <IndianRupee className="w-3 h-3" />
-                          Collect
+                          <Pencil className="w-3 h-3" />
+                          Edit
                         </button>
-                      )}
+                        {c.outstandingBalance > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingCustomer(null);
+                              setActiveCustomer(c);
+                              setPayAmount(String(c.outstandingBalance));
+                            }}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium bg-ink text-paper-elevated hover:bg-ink/90 transition-colors"
+                          >
+                            <IndianRupee className="w-3 h-3" />
+                            Collect
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -137,6 +172,60 @@ export default function CustomersPage() {
               );
             })}
           </div>
+
+          {editingCustomer && (
+            <form
+              onSubmit={handleSaveEdit}
+              className="bg-paper-elevated border border-rule-strong rounded-2xl p-5 shadow-dock grid grid-cols-1 sm:grid-cols-4 gap-3 items-end animate-panel-expand"
+            >
+              <div>
+                <label className="block text-[11px] text-ink-muted mb-1">Customer Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-xl bg-paper border border-rule"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-ink-muted mb-1">Phone</label>
+                <input
+                  type="text"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="+91 ..."
+                  className="w-full px-3 py-2 text-sm font-mono rounded-xl bg-paper border border-rule"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-ink-muted mb-1">Area Note</label>
+                <input
+                  type="text"
+                  value={editArea}
+                  onChange={(e) => setEditArea(e.target.value)}
+                  placeholder="Sector / Street"
+                  className="w-full px-3 py-2 text-sm rounded-xl bg-paper border border-rule"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium bg-ink text-paper-elevated hover:bg-vermilion transition-colors"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingCustomer(null)}
+                  className="px-3 py-2 rounded-xl text-xs text-ink-secondary border border-rule"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
 
           {activeCustomer && (
             <form

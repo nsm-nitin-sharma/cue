@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Pencil } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Amount, StatusPill } from "@/components/ui/LedgerPrimitives";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { formatPaymentMethod, getTodayIST, isDateInPeriod, type TimePeriodFilter } from "@/lib/format";
+import type { Expense } from "@/types/cue";
 
 const EXPENSE_FILTERS: { code: TimePeriodFilter; label: string }[] = [
   { code: "today", label: "Today" },
@@ -17,9 +18,10 @@ const EXPENSE_FILTERS: { code: TimePeriodFilter; label: string }[] = [
 ];
 
 export default function ExpensesPage() {
-  const { expenses, addManualExpense } = useCueWorkspace();
+  const { expenses, addManualExpense, updateExpense } = useCueWorkspace();
   const [period, setPeriod] = useState<TimePeriodFilter>("today");
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [category, setCategory] = useState("Daily Expense");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
@@ -39,20 +41,45 @@ export default function ExpensesPage() {
     [filteredExpenses]
   );
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const openEdit = (ex: Expense) => {
+    setEditingId(ex.id);
+    setCategory(ex.category);
+    setDescription(ex.description);
+    setAmount(String(ex.amount));
+    setMethod(ex.paymentMethod);
+    setShowAdd(true);
+  };
+
+  const resetForm = () => {
+    setEditingId(null);
+    setCategory("Daily Expense");
+    setDescription("");
+    setAmount("");
+    setMethod("cash");
+    setShowAdd(false);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = Number(amount);
     if (!description.trim() || amt <= 0) return;
-    addManualExpense({
-      category,
-      description: description.trim(),
-      amount: amt,
-      paymentMethod: method,
-      transactionDate: todayYmd,
-    });
-    setDescription("");
-    setAmount("");
-    setShowAdd(false);
+    if (editingId) {
+      await updateExpense(editingId, {
+        category,
+        description: description.trim(),
+        amount: amt,
+        paymentMethod: method,
+      });
+    } else {
+      addManualExpense({
+        category,
+        description: description.trim(),
+        amount: amt,
+        paymentMethod: method,
+        transactionDate: todayYmd,
+      });
+    }
+    resetForm();
   };
 
   return (
@@ -110,7 +137,7 @@ export default function ExpensesPage() {
           {showAdd && (
             <form
               onSubmit={handleSubmit}
-              className="bg-paper-elevated border border-rule-strong rounded-2xl p-5 shadow-slip grid grid-cols-1 sm:grid-cols-5 gap-3 animate-slip-in"
+              className="bg-paper-elevated border border-rule-strong rounded-2xl p-5 shadow-slip grid grid-cols-1 sm:grid-cols-5 gap-3 animate-panel-expand"
             >
               <select
                 value={category}
@@ -154,10 +181,19 @@ export default function ExpensesPage() {
                 </select>
                 <button
                   type="submit"
-                  className="flex-1 px-3 py-2 rounded-xl text-xs font-medium bg-ink text-paper-elevated"
+                  className="flex-1 px-3 py-2 rounded-xl text-xs font-medium bg-ink hover:bg-vermilion text-paper-elevated transition-colors"
                 >
-                  Save
+                  {editingId ? "Update" : "Save"}
                 </button>
+                {editingId && (
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="px-2.5 py-2 rounded-xl text-xs text-ink-secondary border border-rule"
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             </form>
           )}
@@ -171,12 +207,13 @@ export default function ExpensesPage() {
                   <th className="py-3 px-4">Description</th>
                   <th className="py-3 px-4">Method</th>
                   <th className="py-3 px-4 text-right">Amount</th>
+                  <th className="py-3 px-4 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-rule text-sm">
                 {filteredExpenses.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="py-10 px-4 text-center text-xs text-ink-muted">
+                    <td colSpan={6} className="py-10 px-4 text-center text-xs text-ink-muted">
                       No expenses recorded for this period yet.
                     </td>
                   </tr>
@@ -193,6 +230,17 @@ export default function ExpensesPage() {
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <Amount value={ex.amount} className="font-semibold text-ink" />
+                    </td>
+                    <td className="py-3.5 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(ex)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] text-ink-muted hover:text-ink hover:bg-paper border border-transparent hover:border-rule transition-colors"
+                        title="Edit expense"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        Edit
+                      </button>
                     </td>
                   </tr>
                 ))}

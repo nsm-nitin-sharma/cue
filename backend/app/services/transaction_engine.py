@@ -314,6 +314,7 @@ class TransactionEngine:
         expense_id: str,
         operation_id: str,
         transaction_date: str,
+        new_category: str | None = None,
         new_amount: float | None = None,
         new_payment_method: str | None = None,
         new_description: str | None = None,
@@ -331,6 +332,7 @@ class TransactionEngine:
         if not old_rows:
             raise PolicyBlockedError("Previous expense not found to correct.")
         old = old_rows[0]
+        final_cat = new_category.strip() if new_category is not None else str(old["category"])
         final_amount = float(new_amount) if new_amount is not None else float(old["amount"])
         final_method = new_payment_method or str(old["payment_method"])
         final_desc = new_description or str(old["description"])
@@ -344,7 +346,7 @@ class TransactionEngine:
             .insert(
                 {
                     "business_id": business_id,
-                    "category": old["category"],
+                    "category": final_cat,
                     "description": final_desc,
                     "amount": final_amount,
                     "payment_method": final_method,
@@ -364,7 +366,7 @@ class TransactionEngine:
             "new_amount": final_amount,
             "old_method": str(old["payment_method"]),
             "new_method": final_method,
-            "category": str(old["category"]),
+            "category": final_cat,
             "description": final_desc,
         }
 
@@ -511,10 +513,14 @@ class TransactionEngine:
         *,
         business_id: str,
         customer_id: str,
+        name: str | None = None,
         phone: str | None = None,
         area_note: str | None = None,
     ) -> dict[str, Any]:
         patch: dict[str, Any] = {"updated_at": "now()"}
+        if name is not None and name.strip():
+            patch["name"] = name.strip()
+            patch["normalized_name"] = " ".join(name.lower().split())
         if phone is not None:
             patch["phone"] = phone.strip()
         if area_note is not None:
@@ -598,6 +604,95 @@ class TransactionEngine:
             .execute()
         )
         return res.data[0]
+
+    def edit_product(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        product_id: str,
+        name: str | None = None,
+        category: str | None = None,
+        base_unit: str | None = None,
+        cost_price: float | None = None,
+        selling_price: float | None = None,
+        stock: float | None = None,
+        low_stock_threshold: float | None = None,
+        aliases: list[str] | None = None,
+        transaction_date: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        patch: dict[str, Any] = {"updated_at": "now()"}
+        if name is not None and name.strip():
+            patch["name"] = name.strip()
+            patch["normalized_name"] = " ".join(name.lower().split())
+        if category is not None:
+            patch["category"] = category.strip() or "General"
+        if base_unit is not None:
+            patch["base_unit"] = base_unit
+        if cost_price is not None:
+            patch["default_cost_price"] = cost_price
+        if selling_price is not None:
+            patch["default_selling_price"] = selling_price
+        if low_stock_threshold is not None:
+            patch["low_stock_threshold"] = low_stock_threshold
+
+        updated_prod = (
+            self.db.table("products")
+            .update(patch)
+            .eq("id", product_id)
+            .eq("business_id", business_id)
+            .execute()
+            .data[0]
+        )
+
+        if stock is not None:
+            inv_rows = (
+                self.db.table("inventory")
+                .select("current_quantity")
+                .eq("business_id", business_id)
+                .eq("product_id", product_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            old_stock = float(inv_rows[0]["current_quantity"]) if inv_rows else 0.0
+            delta = float(stock) - old_stock
+            if abs(delta) > 0.0001:
+                if inv_rows:
+                    self.db.table("inventory").update(
+                        {"current_quantity": float(stock), "updated_at": "now()"}
+                    ).eq("business_id", business_id).eq("product_id", product_id).execute()
+                else:
+                    self.db.table("inventory").insert(
+                        {"business_id": business_id, "product_id": product_id, "current_quantity": float(stock)}
+                    ).execute()
+                self.db.table("inventory_movements").insert(
+                    {
+                        "business_id": business_id,
+                        "product_id": product_id,
+                        "movement_type": "adjustment",
+                        "quantity_delta": delta,
+                        "unit": str(updated_prod.get("base_unit") or "piece"),
+                        "operation_id": operation_id,
+                        "transaction_date": transaction_date,
+                        "notes": "Manual edit adjustment",
+                        "created_by": user_id,
+                    }
+                ).execute()
+
+        if aliases is not None:
+            self.db.table("product_aliases").delete().eq("business_id", business_id).eq(
+                "product_id", product_id
+            ).execute()
+            for al in aliases:
+                if al.strip():
+                    self.save_verified_alias(
+                        business_id=business_id, product_id=product_id, alias_text=al.strip()
+                    )
+
+        return {"product": updated_prod}
 
     def archive_product(self, *, business_id: str, product_id: str) -> None:
         self.db.table("products").update({"is_active": False, "updated_at": "now()"}).eq(

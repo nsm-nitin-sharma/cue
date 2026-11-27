@@ -10,6 +10,9 @@ from app.domain.schemas.intents import (
     ManualExpenseRequest,
     ManualProductRequest,
     OnboardStoreRequest,
+    UpdateCustomerRequest,
+    UpdateExpenseRequest,
+    UpdateProductRequest,
 )
 from app.services.analytics_foundation import AnalyticsFoundationService
 from app.services.memory_30d import Memory30DService
@@ -195,6 +198,70 @@ def add_manual_product(
     for al in req.aliases:
         tx.save_verified_alias(business_id=business_id, product_id=created["product"]["id"], alias_text=al)
     return created
+
+
+@router.patch("/inventory/products/{product_id}")
+def update_manual_product(
+    product_id: str,
+    req: UpdateProductRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.edit_product(
+        business_id=business_id,
+        user_id=user["user_id"],
+        product_id=product_id,
+        name=req.name,
+        category=req.category,
+        base_unit=req.base_unit,
+        cost_price=req.cost_price,
+        selling_price=req.selling_price,
+        stock=req.stock,
+        low_stock_threshold=req.low_stock_threshold,
+        aliases=req.aliases,
+        transaction_date=get_business_today().isoformat(),
+        operation_id=str(uuid.uuid4()),
+    )
+
+
+@router.patch("/customers/{customer_id}")
+def update_manual_customer(
+    customer_id: str,
+    req: UpdateCustomerRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    _ = user
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.update_customer(
+        business_id=business_id,
+        customer_id=customer_id,
+        name=req.name,
+        phone=req.phone,
+        area_note=req.area_note,
+    )
+
+
+@router.patch("/expenses/{expense_id}")
+def update_manual_expense(
+    expense_id: str,
+    req: UpdateExpenseRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.correct_last_expense(
+        business_id=business_id,
+        user_id=user["user_id"],
+        expense_id=expense_id,
+        operation_id=str(uuid.uuid4()),
+        transaction_date=req.transaction_date or get_business_today().isoformat(),
+        new_category=req.category,
+        new_amount=req.amount,
+        new_payment_method=req.payment_method,
+        new_description=req.description,
+    )
 
 
 @router.post("/expenses")

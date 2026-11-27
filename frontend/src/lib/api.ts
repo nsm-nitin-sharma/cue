@@ -192,3 +192,51 @@ export async function reverseOperationRemote(operationId: string) {
     { method: "POST" }
   );
 }
+
+export async function updateProductRemote(
+  productId: string,
+  payload: {
+    name?: string;
+    category?: string;
+    base_unit?: BaseUnit;
+    cost_price?: number;
+    selling_price?: number;
+    stock?: number;
+    low_stock_threshold?: number;
+    aliases?: string[];
+  }
+) {
+  return apiFetch<{ product: Record<string, unknown> }>(
+    `/inventory/products/${encodeURIComponent(productId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function updateCustomerRemote(
+  customerId: string,
+  payload: { name?: string; phone?: string; area_note?: string }
+) {
+  return apiFetch<Record<string, unknown>>(`/customers/${encodeURIComponent(customerId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateExpenseRemote(
+  expenseId: string,
+  payload: {
+    category?: string;
+    description?: string;
+    amount?: number;
+    payment_method?: "cash" | "upi" | "bank" | "credit";
+    transaction_date?: string;
+  }
+) {
+  return apiFetch<Record<string, unknown>>(`/expenses/${encodeURIComponent(expenseId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
