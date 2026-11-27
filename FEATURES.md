@@ -58,6 +58,10 @@
 
 ## 4. Strict "Do You Mean This?" Clarification & Catalog Intelligence
 
+- [ ] **Multi-Command Batch Execution (Single-Breath Operations):**
+  - [ ] Extract and execute multiple distinct operations from one spoken utterance (e.g., *"20 Maggi aayi, 10 Pepsi ki bottle aayi, aur 5 Maggi biki"*) instead of forcing one-by-one turns
+  - [ ] Preserve chronological order within the same utterance (e.g., receive before sale so stock updates accurately)
+  - [ ] Partial batch resolution: execute clear, valid items immediately while holding only ambiguous/missing-field items in `pending_batch_slots` for targeted clarification
 - [ ] **Zero-Guessing Ambiguity Rule:** Any uncertain match or missing field pauses execution and asks *"Do you mean ...?"*
 - [ ] **Verified Alias Learning:** Saying *"Coke"* when DB has *"Coca-Cola"* asks *"Do you mean Coca-Cola?"*:
   - [ ] On **Yes**: Executes transaction atomically **and saves `"Coke"` as a verified alias** in `product_aliases`
