@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   AlertTriangle,
   Crown,
+  ChevronDown,
   LogIn,
   LogOut,
   Mic,
@@ -40,6 +41,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleteText, setDeleteText] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
@@ -138,46 +140,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           )}
 
-          {authUser ? (
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-paper border border-rule">
-              <UserCheck className="w-3.5 h-3.5 text-sage shrink-0" />
-              <span className="hidden sm:inline max-w-[130px] truncate font-medium text-ink" title={authUser.email}>
-                {authUser.name}
-              </span>
-              {store.name && store.name !== "My Store" && (
-                <span className="hidden xl:inline text-[11px] text-ink-muted truncate max-w-[120px]">
-                  · {store.name}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => signOut()}
-                className="ml-1 inline-flex items-center gap-1 text-[11px] text-ink-muted hover:text-crimson transition-colors"
-                title="Sign out"
-              >
-                <LogOut className="w-3 h-3" />
-                <span className="hidden lg:inline">Sign Out</span>
-              </button>
-            </div>
-          ) : (
-            <Link
-              href="/login"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-ink text-paper-elevated hover:bg-vermilion transition-colors"
-            >
-              <LogIn className="w-3.5 h-3.5" />
-              <span>Sign In</span>
-            </Link>
-          )}
-
           <button
             type="button"
             onClick={() => setRegisterOpen(true)}
-            className="inline-flex items-center gap-2.5 px-3 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
+            className="inline-flex items-center gap-2 px-3 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
             title={isLiveBackend ? "Connected to Live Cloud Store" : "Local Mode — Sign in for Live AI"}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? "bg-sage" : "bg-ochre"}`} />
             <span className="hidden lg:inline text-[10px] font-mono uppercase tracking-wider text-ink-muted">
-              {isLiveBackend ? "AI Live" : isDemoMode ? "Demo" : "Local"}
+              {isLiveBackend ? "Live" : isDemoMode ? "Demo" : "Local"}
             </span>
             <span className="font-mono tabular-nums font-semibold text-ink">
               {formatINR(todayStats.salesTotal)}
@@ -189,6 +160,97 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
             <SlidersHorizontal className="w-3.5 h-3.5 text-ink-muted" />
           </button>
+
+          {authUser ? (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setAccountMenuOpen((v) => !v)}
+                className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
+                aria-expanded={accountMenuOpen}
+                aria-haspopup="menu"
+              >
+                <span className="w-5 h-5 rounded bg-ink text-paper-elevated flex items-center justify-center shrink-0">
+                  <Store className="w-3 h-3" />
+                </span>
+                <span className="hidden sm:inline max-w-[160px] truncate font-medium text-ink">
+                  {store.name && store.name !== "My Store" ? store.name : "My Store"}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 text-ink-muted transition-transform duration-150 ${accountMenuOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              {accountMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setAccountMenuOpen(false)}
+                  />
+                  <div
+                    role="menu"
+                    className="absolute right-0 mt-2 w-64 rounded-xl bg-paper-elevated border border-rule-strong shadow-dock z-50 overflow-hidden animate-slip-in"
+                  >
+                    <div className="p-3.5 border-b border-rule bg-paper/60">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-ink truncate">
+                          {store.name || "My Store"}
+                        </p>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase bg-paper-subtle border border-rule text-ink-secondary shrink-0">
+                          {tierLabel}
+                        </span>
+                      </div>
+                      {store.city && (
+                        <p className="text-[11px] text-ink-muted mt-0.5 truncate">{store.city}</p>
+                      )}
+                    </div>
+
+                    <div className="p-3.5 border-b border-rule space-y-1">
+                      <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
+                        <UserCheck className="w-3 h-3 text-sage shrink-0" />
+                        <span>Signed in as</span>
+                      </div>
+                      <p className="text-xs font-medium text-ink truncate">{authUser.name}</p>
+                      {authUser.email && authUser.email !== authUser.name && (
+                        <p className="text-[11px] font-mono text-ink-muted truncate">{authUser.email}</p>
+                      )}
+                    </div>
+
+                    <div className="p-1.5 space-y-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountMenuOpen(false);
+                          setRegisterOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs text-ink-secondary hover:text-ink hover:bg-paper transition-colors text-left"
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                        Store &amp; System Controls
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountMenuOpen(false);
+                          signOut();
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium text-crimson hover:bg-paper transition-colors text-left"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        Sign Out
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium bg-ink text-paper-elevated hover:bg-vermilion transition-colors"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Sign In</span>
+            </Link>
+          )}
         </div>
       </header>
 
