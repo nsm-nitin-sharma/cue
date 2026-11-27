@@ -121,6 +121,7 @@
 - [x] **Pinned Floating Living Acoustic Orb:** Stays cleanly anchored at the bottom above scrolling chat history; features organic breathing/speaking rings, live voice captions, cancel control, and quick-command/test shortcuts
 - [x] **Tactile Paper-Slip Receipt Cards:** Instant `Reverse`, confirmation, and status badges directly in chat
 - [x] **Smooth Minimal Transitions:** Fluid animations across tab switches (`Voice`, `Inventory`, `Sales`, `Khata`, `Expenses`, `Reports`), chat history drawer, and settings drawer open/close
+- [x] **Instant Bottom-Anchored Voice Desk:** Switching back to the Voice tab or changing conversation dates opens directly at the latest bottom messages via pre-paint positioning (smooth-scrolling only when new live messages arrive)
 - [x] **Offline Connectivity Resilience:** Empty/silent audio rejection + Browser `IndexedDB` FIFO Offline Queue with automatic chronological sync on reconnect
 
 ---

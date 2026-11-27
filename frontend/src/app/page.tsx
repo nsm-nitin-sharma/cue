@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useLayoutEffect, useRef } from "react";
 import Link from "next/link";
 import { ArrowRight, Volume2 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
@@ -22,10 +22,31 @@ export default function VoiceDeskPage() {
     ttsEnabled,
   } = useCueWorkspace();
 
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const hasMountedRef = useRef(false);
+  const prevDateRef = useRef<string>(activeDate);
+  const prevCountRef = useRef<number>(activeConversation.entries.length);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    const count = activeConversation.entries.length;
+    const isInitialOrDateSwitch =
+      !hasMountedRef.current || prevDateRef.current !== activeDate || prevCountRef.current === 0;
+
+    if (isInitialOrDateSwitch) {
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      } else {
+        bottomRef.current?.scrollIntoView({ behavior: "auto" });
+      }
+      hasMountedRef.current = true;
+    } else if (count > prevCountRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+
+    prevDateRef.current = activeDate;
+    prevCountRef.current = count;
   }, [activeConversation.entries.length, activeDate]);
 
   const todayDate = conversations[0]?.date;
@@ -34,7 +55,7 @@ export default function VoiceDeskPage() {
   return (
     <AppShell>
       <div className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div className="flex-1 overflow-y-auto px-4 sm:px-8 pt-7 pb-44">
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 sm:px-8 pt-7 pb-44">
           <div className="max-w-2xl mx-auto">
             {activeDate !== todayDate && todayDate && (
               <div className="mb-6 pb-3 border-b border-rule flex items-center justify-between">
