@@ -76,7 +76,7 @@ SECURITY & PRECISION RULES:
 QUERY TOPIC RULES (CRITICAL — NEVER MIX TOPICS):
 - Asking about expenses/kharcha/spending ("Is there any expenses till now?", "Aaj kitna kharcha hua?", "Expenses batao") -> `intent: "query_business"`, `query_topic: "expenses_summary"`.
 - Asking about stock/inventory quantities ("Hamari inventory mein kitni Coca Cola hain?", "How much Maggi in stock?") -> `intent: "query_business"`, `query_topic: "stock_check"`, `product_query: "<item>"`.
-- Asking about sales/revenue ("Aaj kitni sale hui?", "Sales till now") -> `intent: "query_business"`, `query_topic: "sales_summary"`.
+- Asking about sales/revenue ("Aaj kitni sale hui?", "Sales till now", OR item-specific "Aaj Maggie ki kitni sales hui?", "How many Cokes sold today?") -> `intent: "query_business"`, `query_topic: "sales_summary"`, and set `product_query: "<item>"` when a specific item is asked (or `null` for overall store sales).
 - Asking about pending payments / udhaar / customer balance ("Ramesh ka kitna baki hai?", "Pending payments?") -> `intent: "query_business"`, `query_topic: "customer_balance"` or `"pending_payments"`.
 - Asking about overall day summary / profit ("Aaj ka poora hisaab", "Today's summary") -> `intent: "query_business"`, `query_topic: "daily_summary"`.
 """
@@ -176,11 +176,19 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[VoiceOperationItem(intent="query_business", query_topic="daily_summary")],
         )
 
-    if re.search(r"(kitni sale|aaj ki sale|today.*sale|sales till now|pending|kitna payment|baki hai)", lower):
+    if re.search(r"(kitni sale|kitne sales|aaj ki sale|today.*sale|sales till now|pending|kitna payment|baki hai)", lower):
         topic = "pending_payments" if ("pending" in lower or "payment" in lower or "baki" in lower) else "sales_summary"
+        pq_clean: str | None = None
+        if topic == "sales_summary":
+            pq = re.sub(
+                r"\b(aaj|today|ki|ke|ka|kitni|kitne|sale|sales|hui|hua|hai|hain|till|now|total|batao|dikhao|how|many|much|sold)\b",
+                " ",
+                re.sub(r"[?!.,]+", " ", lower),
+            )
+            pq_clean = re.sub(r"\s+", " ", pq).strip() or None
         return IntentProposal(
             detected_language=lang,  # type: ignore[arg-type]
-            operations=[VoiceOperationItem(intent="query_business", query_topic=topic)],
+            operations=[VoiceOperationItem(intent="query_business", query_topic=topic, product_query=pq_clean)],
         )
 
     # Split multi-clause utterances ("20 Maggi aayi, 10 Pepsi aayi, 5 Maggi biki")

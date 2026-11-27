@@ -200,7 +200,74 @@ class QueryEngine:
                 "amount_inr": net,
             }
 
-        # Default: today's sales summary
+        # Default: today's sales summary (overall OR item-specific when product_query is provided)
+        if product_query:
+            prods = products or []
+            als = aliases or []
+            pres = resolve_product(product_query, prods, als)
+            matched_prods: list[dict[str, Any]] = []
+            if pres.status in {"exact", "verify_alias"} and pres.product:
+                matched_prods = [pres.product]
+            elif pres.candidates:
+                matched_prods = pres.candidates
+            else:
+                tokens = [t for t in product_query.lower().replace("-", " ").split() if len(t) > 1]
+                matched_prods = [
+                    p
+                    for p in prods
+                    if tokens and all(t in p["name"].lower().replace("-", " ") for t in tokens)
+                ]
+
+            if not matched_prods:
+                return {
+                    "reply": f"Inventory mein '{product_query}' naam ka koi product nahi mila.",
+                    "lines": [],
+                    "amount_inr": 0.0,
+                }
+
+            matched_ids = {str(p["id"]) for p in matched_prods}
+            sales_res = (
+                self.db.table("sales")
+                .select("id, total_amount, paid_amount, payment_status, status, sale_items(product_id, quantity, unit, line_total)")
+                .eq("business_id", business_id)
+                .eq("transaction_date", today_str)
+                .eq("status", "active")
+                .execute()
+            )
+            qty_by_id: dict[str, float] = {str(p["id"]): 0.0 for p in matched_prods}
+            rev_by_id: dict[str, float] = {str(p["id"]): 0.0 for p in matched_prods}
+            for s in sales_res.data or []:
+                for it in s.get("sale_items") or []:
+                    pid = str(it.get("product_id") or "")
+                    if pid in matched_ids:
+                        qty_by_id[pid] = qty_by_id.get(pid, 0.0) + float(it.get("quantity") or 0)
+                        rev_by_id[pid] = rev_by_id.get(pid, 0.0) + float(it.get("line_total") or 0)
+
+            total_qty = sum(qty_by_id.values())
+            total_rev = sum(rev_by_id.values())
+            if total_qty <= 0:
+                label = matched_prods[0]["name"] if len(matched_prods) == 1 else product_query
+                return {
+                    "reply": f"Aaj abhi tak {label} ki koi sale nahi hui hai.",
+                    "lines": [{"label": p["name"], "value": f"0 {p.get('base_unit', 'piece')} (₹0)", "tone": "neutral"} for p in matched_prods],
+                    "amount_inr": 0.0,
+                }
+
+            lines = [
+                {
+                    "label": p["name"],
+                    "value": f"{qty_by_id[str(p['id'])]:g} {p.get('base_unit', 'piece')} · ₹{rev_by_id[str(p['id'])]:,.0f}",
+                    "tone": "sage" if qty_by_id[str(p["id"])] > 0 else "neutral",
+                }
+                for p in matched_prods
+            ]
+            label = matched_prods[0]["name"] if len(matched_prods) == 1 else product_query
+            return {
+                "reply": f"Aaj abhi tak {label} ki total {total_qty:g} units (₹{total_rev:,.0f}) ki sale hui hai.",
+                "lines": lines,
+                "amount_inr": total_rev,
+            }
+
         sales_res = (
             self.db.table("sales")
             .select("total_amount, paid_amount, payment_status, status")

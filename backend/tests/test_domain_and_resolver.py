@@ -484,3 +484,105 @@ async def test_exact_product_sale_executes_without_hitting_not_found():
     )
     assert res.status == "executed"
     assert "nahi mila" not in res.reply.lower()
+
+
+def test_item_specific_sales_query_and_quantity_correction_revenue():
+    from app.services.transaction_engine import TransactionEngine
+
+    # 1. Fallback parser extracts product_query on item-specific sales queries
+    q_prop = deterministic_fallback_parse("aaj Maggie ki kitne sales hui", "hinglish")
+    assert q_prop.operations[0].intent == "query_business"
+    assert q_prop.operations[0].query_topic == "sales_summary"
+    assert q_prop.operations[0].product_query == "maggie"
+
+    # 2. QueryEngine computes item-specific sales across matching variants
+    class _FakeResp:
+        def __init__(self, data):
+            self.data = data
+
+    class _FakeTable:
+        def __init__(self, rows):
+            self._rows = rows
+            self._action = "select"
+            self._payload = None
+            self._filters = []
+
+        def select(self, *_a, **_k):
+            return self
+
+        def update(self, payload):
+            self._action = "update"
+            self._payload = payload
+            return self
+
+        def eq(self, k, v):
+            self._filters.append((k, v))
+            return self
+
+        def execute(self):
+            matched = [r for r in self._rows if all(r.get(k) == v for k, v in self._filters)]
+            if self._action == "update":
+                for r in matched:
+                    r.update(self._payload)
+            return _FakeResp(matched)
+
+    class _FakeRPC:
+        def __init__(self, rows, new_qty):
+            self._rows = rows
+            self._new_qty = new_qty
+
+        def execute(self):
+            s = self._rows[0]
+            s["total_amount"] = self._new_qty * 50.0
+            s["paid_amount"] = self._new_qty * 50.0
+            s["status"] = "corrected"  # simulates SQL RPC setting corrected
+            s["sale_items"][0]["quantity"] = self._new_qty
+            s["sale_items"][0]["line_total"] = self._new_qty * 50.0
+            return _FakeResp({"old_quantity": 10.0, "new_quantity": self._new_qty, "new_total": self._new_qty * 50.0})
+
+    class _FakeDB:
+        def __init__(self, sales_rows):
+            self.sales_rows = sales_rows
+
+        def table(self, name):
+            return _FakeTable(self.sales_rows if name == "sales" else [])
+
+        def rpc(self, _fn, params):
+            return _FakeRPC(self.sales_rows, float(params["p_new_quantity"]))
+
+    today_str = date.today().isoformat()
+    # Note: QueryEngine uses get_business_today("Asia/Kolkata"); match it dynamically
+    from app.core.time_utils import get_business_today
+
+    today_ist = get_business_today("Asia/Kolkata").isoformat()
+    sales_rows = [
+        {
+            "id": "s-coke",
+            "business_id": "b1",
+            "transaction_date": today_ist,
+            "status": "active",
+            "total_amount": 500.0,
+            "paid_amount": 500.0,
+            "sale_items": [{"product_id": "p-coke", "quantity": 10.0, "unit": "piece", "line_total": 500.0}],
+        }
+    ]
+    prods = [
+        {"id": "p-coke", "name": "Coca-Cola 750 Ml", "base_unit": "piece"},
+        {"id": "p-mag", "name": "Maggie Masala 70 Gram", "base_unit": "packet"},
+    ]
+    db = _FakeDB(sales_rows)
+    tx = TransactionEngine(db)
+    tx.correct_sale_quantity(
+        business_id="b1",
+        user_id="u1",
+        sale_id="s-coke",
+        new_quantity=7.0,
+        operation_id="op-corr-7",
+        transaction_date=today_ist,
+    )
+    # Must stay active so updated ₹350 revenue is counted!
+    assert sales_rows[0]["status"] == "active"
+    qe = QueryEngine(db)
+    coke_res = qe.answer_query(business_id="b1", topic="sales_summary", product_query="Coke", products=prods, aliases=[])
+    assert coke_res["amount_inr"] == 350.0
+    assert "7 units" in coke_res["reply"] or "7 piece" in coke_res["lines"][0]["value"]

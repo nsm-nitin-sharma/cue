@@ -514,6 +514,12 @@ class TransactionEngine:
                 "p_transaction_date": transaction_date,
             },
         ).execute()
+        # rpc_correct_sale_quantity updates the sole sale row in-place without inserting a child row;
+        # keep status="active" (for new_quantity > 0) so Today/Sales Ledger/QueryEngine include the corrected revenue.
+        if new_quantity > 0:
+            self.db.table("sales").update({"status": "active"}).eq("id", sale_id).eq(
+                "business_id", business_id
+            ).execute()
         return res.data
 
     def correct_sale_payment(

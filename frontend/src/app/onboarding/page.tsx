@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, ArrowRight, Store } from "lucide-react";
+import { Check, ArrowRight, Store, Loader2 } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { fetchWorkspaceBootstrap, onboardStoreRemote } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -70,6 +70,7 @@ export default function OnboardingPage() {
   const [ownerName, setOwnerName] = useState(authUser?.name || store.ownerName || "");
   const [city, setCity] = useState(store.city || "");
   const [seedSampleCatalog, setSeedSampleCatalog] = useState(false);
+  const [activating, setActivating] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -103,6 +104,8 @@ export default function OnboardingPage() {
 
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (activating) return;
+    setActivating(true);
     setStoreTier(selectedTier);
     updateStoreProfile({ name: storeName, ownerName, city });
     try {
@@ -118,10 +121,11 @@ export default function OnboardingPage() {
           await refreshWorkspace();
         }
       }
+      router.push("/");
     } catch {
       // Smooth local continuation if DB migrations haven't been run yet
+      router.push("/");
     }
-    router.push("/");
   };
 
   if (checkingStore) {
@@ -289,10 +293,20 @@ export default function OnboardingPage() {
             </p>
             <button
               type="submit"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-ink hover:bg-vermilion text-white transition-colors"
+              disabled={activating}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-ink hover:bg-vermilion text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
-              Activate &amp; Open Voice Desk
-              <ArrowRight className="w-4 h-4" />
+              {activating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Activating Store...
+                </>
+              ) : (
+                <>
+                  Activate &amp; Open Voice Desk
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </div>
         </form>
