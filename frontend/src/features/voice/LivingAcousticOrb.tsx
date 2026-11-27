@@ -27,6 +27,9 @@ interface SpeechRecognitionInstanceLike {
   stop: () => void;
 }
 
+// Toggle to false to immediately revert to the previous compact non-jiggly mic orb
+const USE_LARGE_JIGGLY_ORB = true;
+
 export function LivingAcousticOrb() {
   const {
     language,
@@ -391,14 +394,14 @@ export function LivingAcousticOrb() {
           />
 
           <span
-            className={`absolute w-20 h-20 rounded-full border border-vermilion/25 pointer-events-none transition-transform duration-75 ${
+            className={`absolute ${USE_LARGE_JIGGLY_ORB ? "w-[104px] h-[104px]" : "w-20 h-20"} rounded-full border border-vermilion/25 pointer-events-none transition-transform duration-75 ${
               isRecording ? "" : "animate-halo-outer"
             }`}
             style={isRecording ? { transform: `scale(${ring2Scale})`, opacity: 0.25 + audioEnergy * 0.45 } : undefined}
           />
 
           <span
-            className={`absolute w-20 h-20 rounded-full bg-vermilion/10 pointer-events-none transition-transform duration-75 ${
+            className={`absolute ${USE_LARGE_JIGGLY_ORB ? "w-[104px] h-[104px]" : "w-20 h-20"} rounded-full bg-vermilion/10 pointer-events-none transition-transform duration-75 ${
               isRecording ? "" : "animate-halo-idle"
             }`}
             style={isRecording ? { transform: `scale(${ring1Scale})`, opacity: 0.35 + audioEnergy * 0.5 } : undefined}
@@ -415,12 +418,20 @@ export function LivingAcousticOrb() {
                   ? "Stop and send voice command"
                   : "Start voice command"
             }
-            className={`group relative w-[76px] h-[76px] rounded-full flex flex-col items-center justify-center overflow-hidden transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out shadow-orb border ${
+            className={`group relative ${
+              USE_LARGE_JIGGLY_ORB
+                ? "w-[96px] h-[96px] orb-spring-transition hover:scale-110 active:scale-90"
+                : "w-[76px] h-[76px] transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out"
+            } rounded-full flex flex-col items-center justify-center overflow-hidden shadow-orb border ${
               isProcessing
                 ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95"
                 : isRecording
-                  ? "bg-vermilion border-vermilion text-white scale-105"
-                  : "bg-ink border-ink hover:border-vermilion text-white animate-orb-breathe"
+                  ? USE_LARGE_JIGGLY_ORB
+                    ? "bg-vermilion border-vermilion text-white animate-orb-jiggle-active"
+                    : "bg-vermilion border-vermilion text-white scale-105"
+                  : USE_LARGE_JIGGLY_ORB
+                    ? "bg-ink border-ink hover:border-vermilion text-white animate-orb-jiggle"
+                    : "bg-ink border-ink hover:border-vermilion text-white animate-orb-breathe"
             }`}
           >
             {!isProcessing && (
@@ -438,21 +449,21 @@ export function LivingAcousticOrb() {
               </>
             )}
             {isProcessing ? (
-              <Loader2 className="relative z-10 w-6 h-6 animate-spin" />
+              <Loader2 className={`relative z-10 ${USE_LARGE_JIGGLY_ORB ? "w-7 h-7" : "w-6 h-6"} animate-spin`} />
             ) : isRecording ? (
-              <div className="relative z-10 flex items-center justify-center gap-1 h-6">
+              <div className={`relative z-10 flex items-center justify-center gap-1 ${USE_LARGE_JIGGLY_ORB ? "h-7" : "h-6"}`}>
                 {freqBars.map((b, i) => (
                   <span
                     key={i}
                     className="w-1 rounded-full bg-white transition-all duration-75"
-                    style={{ height: `${Math.max(6, Math.round(b * 24))}px` }}
+                    style={{ height: `${Math.max(6, Math.round(b * (USE_LARGE_JIGGLY_ORB ? 28 : 24)))}px` }}
                   />
                 ))}
               </div>
             ) : (
-              <div className="relative z-10 flex flex-col items-center justify-center gap-0.5">
-                <Mic className="w-5 h-5 stroke-[1.8]" />
-                <div className="flex items-end gap-[2px] h-1.5 opacity-75">
+              <div className="relative z-10 flex flex-col items-center justify-center gap-1">
+                <Mic className={`${USE_LARGE_JIGGLY_ORB ? "w-6 h-6" : "w-5 h-5"} stroke-[1.8]`} />
+                <div className={`flex items-end gap-[2px] ${USE_LARGE_JIGGLY_ORB ? "h-2" : "h-1.5"} opacity-75`}>
                   <span className="w-[2px] h-full rounded-full bg-white/80 animate-orb-wave" style={{ animationDelay: "0ms" }} />
                   <span className="w-[2px] h-full rounded-full bg-white/95 animate-orb-wave" style={{ animationDelay: "180ms" }} />
                   <span className="w-[2px] h-full rounded-full bg-white/80 animate-orb-wave" style={{ animationDelay: "360ms" }} />
@@ -468,7 +479,9 @@ export function LivingAcousticOrb() {
             type="button"
             onClick={cancelRecording}
             aria-label="Cancel voice recording"
-            className="absolute left-[calc(50%+68px)] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink-secondary hover:text-crimson hover:border-crimson/40 shadow-slip transition-all duration-200 animate-panel-expand active:scale-95"
+            className={`absolute ${
+              USE_LARGE_JIGGLY_ORB ? "left-[calc(50%+82px)]" : "left-[calc(50%+68px)]"
+            } inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink-secondary hover:text-crimson hover:border-crimson/40 shadow-slip transition-all duration-200 animate-panel-expand active:scale-95`}
           >
             <X className="w-3.5 h-3.5" />
             <span>Cancel</span>
@@ -480,7 +493,9 @@ export function LivingAcousticOrb() {
             aria-label="Type command"
             aria-expanded={showTypeBar}
             title="Type command"
-            className={`absolute left-[calc(50%+68px)] w-10 h-10 rounded-full flex items-center justify-center border shadow-slip transition-all duration-200 active:scale-95 ${
+            className={`absolute ${
+              USE_LARGE_JIGGLY_ORB ? "left-[calc(50%+82px)]" : "left-[calc(50%+68px)]"
+            } w-10 h-10 rounded-full flex items-center justify-center border shadow-slip transition-all duration-200 active:scale-95 ${
               showTypeBar
                 ? "bg-ink text-paper-elevated border-ink hover:bg-ink/90"
                 : "bg-paper-elevated border-rule-strong text-ink hover:border-ink hover:bg-white"

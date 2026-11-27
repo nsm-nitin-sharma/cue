@@ -218,3 +218,59 @@
 .animate-orb-wave {
   animation: orbWavePulse 1.4s ease-in-out infinite;
 }
+
+/* Reversible jiggly & springy large-orb animations */
+@keyframes orbJiggle {
+  0%, 100% {
+    border-radius: 52% 48% 51% 49% / 49% 52% 48% 51%;
+    transform: scale(1) rotate(0deg);
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.2), 0 0 0 0 rgba(225, 77, 42, 0.22);
+  }
+  25% {
+    border-radius: 47% 53% 48% 52% / 53% 47% 52% 48%;
+    transform: scale(1.045, 0.975) rotate(-1.5deg);
+  }
+  50% {
+    border-radius: 53% 47% 52% 48% / 47% 53% 48% 52%;
+    transform: scale(0.98, 1.045) rotate(1.5deg);
+    box-shadow: 0 14px 36px rgba(225, 77, 42, 0.24), 0 0 0 14px rgba(225, 77, 42, 0);
+  }
+  75% {
+    border-radius: 48% 52% 47% 53% / 52% 48% 53% 47%;
+    transform: scale(1.03, 0.985) rotate(-1deg);
+  }
+}
+
+@keyframes orbJiggleActive {
+  0%, 100% {
+    border-radius: 54% 46% 52% 48% / 48% 54% 46% 52%;
+    transform: scale(1.05, 1.03) rotate(-1deg);
+  }
+  33% {
+    border-radius: 46% 54% 48% 52% / 54% 46% 52% 48%;
+    transform: scale(1.08, 0.97) rotate(1.8deg);
+  }
+  66% {
+    border-radius: 52% 48% 45% 55% / 46% 53% 47% 54%;
+    transform: scale(0.98, 1.09) rotate(-1.6deg);
+  }
+}
+
+.animate-orb-jiggle {
+  animation: orbJiggle 4.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  will-change: transform, border-radius;
+}
+
+.animate-orb-jiggle-active {
+  animation: orbJiggleActive 2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+  will-change: transform, border-radius;
+}
+
+.orb-spring-transition {
+  transition:
+    transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    border-radius 500ms ease,
+    box-shadow 350ms ease,
+    background-color 300ms ease,
+    border-color 300ms ease;
+}
