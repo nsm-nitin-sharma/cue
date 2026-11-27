@@ -479,22 +479,14 @@ export function LivingAcousticOrb() {
             onClick={() => setShowTypeBar((v) => !v)}
             aria-label="Type command"
             aria-expanded={showTypeBar}
-            title="Type a command (Press /)"
-            className={`absolute left-[calc(50%+54px)] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium border shadow-slip transition-all duration-200 active:scale-95 ${
+            title="Type command"
+            className={`absolute left-[calc(50%+54px)] w-10 h-10 rounded-full flex items-center justify-center border shadow-slip transition-all duration-200 active:scale-95 ${
               showTypeBar
                 ? "bg-ink text-paper-elevated border-ink hover:bg-ink/90"
                 : "bg-paper-elevated border-rule-strong text-ink hover:border-ink hover:bg-white"
             }`}
           >
-            <Keyboard className="w-3.5 h-3.5 shrink-0" />
-            <span>Type</span>
-            <span
-              className={`hidden sm:inline font-mono text-[10px] px-1 py-0.2 rounded ${
-                showTypeBar ? "bg-white/15 text-white/80" : "bg-paper-subtle text-ink-muted"
-              }`}
-            >
-              /
-            </span>
+            <Keyboard className="w-4 h-4 shrink-0" />
           </button>
         )}
       </div>
@@ -515,7 +507,7 @@ export function LivingAcousticOrb() {
         </div>
 
         <p className="hidden sm:block text-[11px] font-mono text-ink-muted">
-          Space · Speak &nbsp;·&nbsp; / · Type &nbsp;·&nbsp; Two-finger swipe · Switch tabs
+          Space · Speak &nbsp;·&nbsp; / · Type
         </p>
       </div>
     </div>

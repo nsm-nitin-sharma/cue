@@ -109,6 +109,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const currentTabIdx = NAV_TABS.findIndex((t) => t.href === pathname);
 
+  const prepareTabDirection = useCallback(
+    (targetIdx: number) => {
+      if (currentTabIdx === -1 || targetIdx === -1 || targetIdx === currentTabIdx) {
+        pendingTabDirection = "none";
+        return;
+      }
+      pendingTabDirection = targetIdx > currentTabIdx ? "next" : "prev";
+    },
+    [currentTabIdx]
+  );
+
   const navigateBySwipe = useCallback(
     (dir: "next" | "prev") => {
       if (currentTabIdx === -1) return;
@@ -266,12 +277,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Center: Crisp Architectural Segmented Nav */}
         <nav className="hidden md:flex items-center p-0.5 rounded-lg bg-paper-subtle border border-rule">
-          {NAV_TABS.map((tab) => {
+          {NAV_TABS.map((tab, idx) => {
             const active = pathname === tab.href;
             return (
               <Link
                 key={tab.href}
                 href={tab.href}
+                onClick={() => prepareTabDirection(idx)}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-all duration-300 ease-out active:scale-[0.97] ${
                   active
                     ? "bg-paper-elevated text-ink shadow-sm border border-rule/80"
@@ -468,12 +480,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Mobile Compact Route Strip */}
       <div className="md:hidden flex items-center gap-1 px-4 py-2 overflow-x-auto no-scrollbar border-b border-rule bg-paper-elevated">
-        {NAV_TABS.map((tab) => {
+        {NAV_TABS.map((tab, idx) => {
           const active = pathname === tab.href;
           return (
             <Link
               key={tab.href}
               href={tab.href}
+              onClick={() => prepareTabDirection(idx)}
               className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-medium ${
                 active ? "bg-ink text-paper-elevated" : "text-ink-secondary"
               }`}
@@ -519,6 +532,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {pathname !== "/" && (
         <Link
           href="/"
+          onClick={() => prepareTabDirection(0)}
           className="fixed bottom-6 right-6 z-30 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-ink hover:bg-vermilion text-white shadow-orb transition-colors"
           title="Return to Voice Console"
         >

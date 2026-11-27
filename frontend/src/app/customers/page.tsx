@@ -17,6 +17,11 @@ export default function CustomersPage() {
   const [editArea, setEditArea] = useState("");
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState<"cash" | "upi" | "bank">("cash");
+  const [showSettled, setShowSettled] = useState(false);
+
+  const pendingCustomers = customers.filter((c) => c.outstandingBalance > 0.009);
+  const settledCount = customers.length - pendingCustomers.length;
+  const visibleCustomers = showSettled ? customers : pendingCustomers;
 
   const openEdit = (c: Customer) => {
     setActiveCustomer(null);
@@ -64,21 +69,42 @@ export default function CustomersPage() {
               </p>
             </div>
 
-            <div className="px-4 py-2.5 rounded-2xl bg-paper-elevated border border-rule">
-              <p className="text-[10px] font-mono uppercase text-ink-muted">Total Receivable</p>
-              <Amount value={todayStats.outstandingTotal} className="text-lg font-semibold text-ochre" />
+            <div className="flex flex-wrap items-center gap-2.5">
+              {settledCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowSettled((v) => !v)}
+                  className={`px-3 py-2 rounded-xl text-xs font-medium border transition-colors ${
+                    showSettled
+                      ? "bg-ink text-paper-elevated border-ink"
+                      : "bg-paper-elevated text-ink-secondary border-rule hover:border-rule-strong hover:text-ink"
+                  }`}
+                >
+                  {showSettled ? `Showing All (${customers.length})` : `Show Settled (${settledCount})`}
+                </button>
+              )}
+              <div className="px-4 py-2.5 rounded-2xl bg-paper-elevated border border-rule">
+                <p className="text-[10px] font-mono uppercase text-ink-muted">Total Receivable</p>
+                <Amount value={todayStats.outstandingTotal} className="text-lg font-semibold text-ochre" />
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {customers.length === 0 && (
+            {visibleCustomers.length === 0 && (
               <div className="md:col-span-2 bg-paper-elevated border border-rule rounded-2xl p-8 text-center text-xs text-ink-muted">
-                No customers in Khata yet. Say &ldquo;Nitin purchased 10 bottles of Coke but he did not paid&rdquo; to track Udhaar automatically.
+                {customers.length === 0
+                  ? "No customers in Khata yet. Say “Nitin purchased 10 bottles of Coke but he did not paid” to track Udhaar automatically."
+                  : "All customer Udhaar balances are settled!"}
               </div>
             )}
-            {customers.map((c) => {
+            {visibleCustomers.map((c) => {
               const customerUdhaar = sales.filter(
-                (s) => s.customerId === c.id && s.status === "active" && s.paymentStatus !== "paid"
+                (s) =>
+                  s.customerId === c.id &&
+                  s.status === "active" &&
+                  s.paymentStatus !== "paid" &&
+                  s.totalAmount - s.paidAmount > 0.009
               );
               return (
                 <div
