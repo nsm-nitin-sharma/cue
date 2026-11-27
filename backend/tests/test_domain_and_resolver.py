@@ -453,3 +453,34 @@ def test_devanagari_variant_reply_and_repeated_disambiguation():
     # Spelling variation ("Meggie Masala 500 Gram") when "Maggi Masala 500g" exists asks clarification instead of not_found
     with_500 = resolve_product("Meggie Masala 500 Gram", [{"id": "m500", "name": "Maggi Masala 500g", "base_unit": "packet"}], [])
     assert with_500.status in {"exact", "verify_alias"} and with_500.product["id"] == "m500"
+
+
+async def test_exact_product_sale_executes_without_hitting_not_found():
+    from app.services.voice_pipeline import VoicePipelineService
+
+    class _DummyDB:
+        pass
+
+    vp = VoicePipelineService(_DummyDB())
+    vp.tx.record_sale = lambda **kw: {"sale_id": "sale-1", "before_qty": 27.0, "after_qty": 26.0, "total_amount": 12.0}
+    vp._finalize_turn = lambda *a, **kw: None
+    res = await vp._execute_operations_batch(
+        operations=[VoiceOperationItem(intent="record_sale", product_query="Maggie Masala 70 Gram", quantity=1, unit="piece", payment_method="cash", payment_status="paid")],
+        business_id="b1",
+        user_id="u1",
+        conv_id="conv-1",
+        today_str="2026-11-27",
+        tz_name="Asia/Kolkata",
+        operation_id="11111111-1111-1111-1111-111111111111",
+        payload_hash="hash-1",
+        raw_transcript="ek maggi 70 gram bik gayi",
+        language="hinglish",
+        stt_provider="text",
+        stt_confidence=1.0,
+        products=[{"id": "p70", "name": "Maggie Masala 70 Gram", "base_unit": "piece", "current_stock": 27.0, "default_selling_price": 12.0, "default_cost_price": 10.0}],
+        aliases=[],
+        customers=[],
+        context_state={},
+    )
+    assert res.status == "executed"
+    assert "nahi mila" not in res.reply.lower()

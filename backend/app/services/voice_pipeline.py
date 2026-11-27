@@ -1327,8 +1327,6 @@ class VoicePipelineService:
                     )
                 else:
                     pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
-                    if pres.status == "exact":
-                        target_prod = pres.product
                     inferred_pm = op.payment_method or (
                         "upi"
                         if re.search(
@@ -1338,7 +1336,9 @@ class VoicePipelineService:
                         )
                         else "cash"
                     )
-                    if pres.status == "verify_alias" and pres.product:
+                    if pres.status == "exact":
+                        target_prod = pres.product
+                    elif pres.status == "verify_alias" and pres.product:
                         remaining = [item.model_dump() for item in operations[idx + 1 :]]
                         if remaining:
                             context_state["pending_batch_items"] = remaining
