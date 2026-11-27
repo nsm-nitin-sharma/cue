@@ -182,3 +182,20 @@ def test_expenses_and_stock_query_parsing():
     # Single-variant catalog items resolve directly even without size suffix or minor spelling variance
     assert resolve_product("Coca-Cola", PRODUCTS, ALIASES).status == "exact"
     assert resolve_product("Maggie Masala", PRODUCTS, ALIASES).status == "exact"
+
+    # Multi-variant catalog: "Coke" with 2 Coca-Cola variants & "Maggi masala" with 70g/100g -> ambiguous with all options
+    multi_prods = [
+        {"id": "c1", "name": "Coca-Cola 750ml", "base_unit": "piece"},
+        {"id": "c2", "name": "Coca-Cola 2L", "base_unit": "piece"},
+        {"id": "m1", "name": "Maggi Masala 70g", "base_unit": "packet"},
+        {"id": "m2", "name": "Maggi Masala 100g", "base_unit": "packet"},
+    ]
+    coke_multi = resolve_product("Coke", multi_prods, [])
+    assert coke_multi.status == "ambiguous"
+    assert {c["name"] for c in coke_multi.candidates} == {"Coca-Cola 750ml", "Coca-Cola 2L"}
+
+    maggi_multi = resolve_product("Maggi masala", multi_prods, [])
+    assert maggi_multi.status == "ambiguous"
+    assert {c["name"] for c in maggi_multi.candidates} == {"Maggi Masala 70g", "Maggi Masala 100g"}
+    picked = resolve_short_variant_reply("Maggi masala 70 gram", maggi_multi.candidates)
+    assert picked is not None and picked["name"] == "Maggi Masala 70g"

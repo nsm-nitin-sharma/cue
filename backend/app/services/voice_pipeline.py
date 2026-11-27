@@ -1118,7 +1118,16 @@ class VoicePipelineService:
                             "draft": draft,
                         }
                         names = " ya ".join(c["name"] for c in pres.candidates)
-                        msg = f"{op.product_query} mein {len(pres.candidates)} variants hain: {names}. Aapka kya matlab tha?"
+                        qty_disp = f"{float(op.quantity or 1):g}"
+                        action_disp = (
+                            "sale"
+                            if op.intent == "record_sale"
+                            else ("receive" if op.intent == "inventory_receive" else op.intent.replace("inventory_", ""))
+                        )
+                        msg = (
+                            f"'{op.product_query}' ke {len(pres.candidates)} options mile: {names} "
+                            f"({qty_disp} {action_disp}). Screen se select karein ya exact naam bolein."
+                        )
                         res = VoiceTurnResult(
                             operation_id=operation_id,
                             status="needs_clarification",

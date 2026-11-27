@@ -57,6 +57,14 @@ def normalize_text(raw: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+def _normalize_units(norm: str) -> str:
+    s = re.sub(r"\b(\d+(?:\.\d+)?)\s*(?:grams?|gms?)\b", r"\1g", norm)
+    s = re.sub(r"\b(\d+(?:\.\d+)?)\s*(?:kilograms?|kilos?|kgs?)\b", r"\1kg", s)
+    s = re.sub(r"\b(\d+(?:\.\d+)?)\s*(?:millilitres?|milliliters?|mls?)\b", r"\1ml", s)
+    s = re.sub(r"\b(\d+(?:\.\d+)?)\s*(?:litres?|liters?)\b", r"\1l", s)
+    return s
+
+
 def _strip_packaging(norm: str) -> str:
     tokens = [
         tok
@@ -115,17 +123,23 @@ def resolve_product(
             if target:
                 return ProductResolution(status="exact", product=target, spoken_term=query)
 
-    # 3. Token / variant containment (e.g., "pepsi" matching multiple variants)
-    core_q = _strip_packaging(norm_q)
+    # 3. Token / variant containment (e.g., "pepsi" or "coke" matching multiple variants)
+    core_q = _strip_packaging(_normalize_units(norm_q))
+    hinted_q = " ".join(_SYNONYM_HINTS.get(tok, tok) for tok in core_q.split())
     q_tokens = {tok for tok in core_q.split() if len(tok) >= 4}
+    h_tokens = {tok for tok in hinted_q.split() if len(tok) >= 4}
     variant_matches: list[dict[str, Any]] = []
     for p in products:
-        p_norm = normalize_text(p["name"])
+        p_norm = _normalize_units(normalize_text(p["name"]))
         core_p = _strip_packaging(p_norm)
-        if core_q in core_p or any(tok in core_p.split() for tok in q_tokens):
+        if (
+            core_q in core_p
+            or hinted_q in core_p
+            or any(tok in core_p.split() for tok in (q_tokens | h_tokens))
+        ):
             variant_matches.append(p)
 
-    if len(variant_matches) == 1:
+    if len(variant_matches) == 1 and hinted_q == core_q:
         return ProductResolution(
             status="exact",
             product=variant_matches[0],
@@ -189,15 +203,25 @@ def resolve_short_variant_reply(
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     """
-    Merges short clarification replies like '500ml', '2l', 'chhoti' into held candidate list.
+    Merges short or full-name clarification replies like '500ml', '2l', 'chhoti', or 'Maggi masala 70 gram'
+    into held candidate list.
     """
-    norm = normalize_text(reply_text).replace(" ", "")
+    norm_u = _normalize_units(normalize_text(reply_text))
+    norm = norm_u.replace(" ", "")
     if not norm:
         return None
 
+    size_tokens = re.findall(r"\b\d+(?:\.\d+)?(?:g|kg|ml|l)\b", norm_u)
+    if size_tokens:
+        for c in candidates:
+            c_u = _normalize_units(normalize_text(c["name"]))
+            if all(st in c_u.replace(" ", "") for st in size_tokens):
+                return c
+
     for c in candidates:
-        c_norm = normalize_text(c["name"]).replace(" ", "")
-        if norm in c_norm or fuzz.partial_ratio(normalize_text(reply_text), normalize_text(c["name"])) >= 82:
+        c_u = _normalize_units(normalize_text(c["name"]))
+        c_norm = c_u.replace(" ", "")
+        if norm in c_norm or c_norm in norm or fuzz.partial_ratio(norm_u, c_u) >= 84:
             return c
         if any(w in norm for w in ("chhoti", "chotti", "small")) and "500" in c_norm:
             return c
