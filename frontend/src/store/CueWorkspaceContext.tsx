@@ -39,6 +39,7 @@ import type {
   Expense,
   InventoryMovement,
   LanguageMode,
+  MascotVariant,
   NewProductDraft,
   PendingConfirmation,
   Product,
@@ -84,6 +85,8 @@ interface CueWorkspaceContextValue {
   updateStoreProfile: (patch: Partial<StoreProfile>) => void;
   language: LanguageMode;
   setLanguage: (lang: LanguageMode) => void;
+  mascot: MascotVariant;
+  setMascot: (variant: MascotVariant) => void;
   ttsEnabled: boolean;
   setTtsEnabled: (enabled: boolean) => void;
   isOffline: boolean;
@@ -362,6 +365,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   });
 
   const [language, setLanguage] = useState<LanguageMode>("hinglish");
+  const [mascot, setMascotState] = useState<MascotVariant>("fox");
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(true);
   const [isOffline, setIsOffline] = useState<boolean>(false);
   const [voicePhase, setVoicePhase] = useState<VoicePhase>("idle");
@@ -404,6 +408,23 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     listOfflineCommands().then(setOfflineQueue);
+    try {
+      const savedMascot = window.localStorage.getItem("cue.mascotVariant");
+      if (savedMascot === "fox" || savedMascot === "classic") {
+        setMascotState(savedMascot);
+      }
+    } catch {
+      // Ignore storage access restrictions
+    }
+  }, []);
+
+  const setMascot = useCallback((variant: MascotVariant) => {
+    setMascotState(variant);
+    try {
+      window.localStorage.setItem("cue.mascotVariant", variant);
+    } catch {
+      // Ignore storage access restrictions
+    }
   }, []);
 
   const refreshLiveWorkspace = useCallback(async () => {
@@ -2841,6 +2862,8 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         updateStoreProfile,
         language,
         setLanguage,
+        mascot,
+        setMascot,
         ttsEnabled,
         setTtsEnabled,
         isOffline,

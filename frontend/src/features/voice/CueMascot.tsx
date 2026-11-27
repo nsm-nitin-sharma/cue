@@ -3,11 +3,12 @@
 import React from "react";
 import { CueMascotClassic } from "@/features/voice/CueMascotClassic";
 import { CueMascotFox } from "@/features/voice/CueMascotFox";
+import type { MascotVariant } from "@/types/cue";
 
 export type CueMood = "idle" | "typing" | "listening" | "thinking";
-export type MascotVariant = "classic" | "fox";
+export type { MascotVariant };
 
-// Change to "classic" to immediately revert back to the first mascot version
+// Default mascot (switchable live via Settings)
 export const ACTIVE_MASCOT: MascotVariant = "fox";
 
 export interface CueMascotProps {

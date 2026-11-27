@@ -34,6 +34,7 @@ const USE_LARGE_JIGGLY_ORB = true;
 export function LivingAcousticOrb() {
   const {
     language,
+    mascot,
     voicePhase,
     setVoicePhase,
     statusMessage,
@@ -499,7 +500,7 @@ export function LivingAcousticOrb() {
             />
 
             {/* Cute Interactive Cue Character */}
-            <CueMascot mood={cueMood} lookX={caretLookX} audioEnergy={audioEnergy} />
+            <CueMascot mood={cueMood} lookX={caretLookX} audioEnergy={audioEnergy} variant={mascot} />
           </button>
         </div>
 

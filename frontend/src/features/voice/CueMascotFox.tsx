@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useId } from "react";
 import type { CueMascotProps } from "@/features/voice/CueMascot";
 
 /**
@@ -9,6 +9,10 @@ import type { CueMascotProps } from "@/features/voice/CueMascot";
  * espresso-dipped paws, and golden shop-bell collar.
  */
 export function CueMascotFox({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProps) {
+  const uid = useId();
+  const sheenId = `${uid}-sheen`;
+  const furId = `${uid}-fur`;
+  const creamId = `${uid}-cream`;
   const clampedX = Math.max(-1, Math.min(1, lookX));
 
   // Vertical stage position inside the 100x100 circular portal
@@ -86,23 +90,23 @@ export function CueMascotFox({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
       className="relative z-10 w-full h-full select-none pointer-events-none overflow-visible"
     >
       <defs>
-        <radialGradient id="cueFoxStageSheen" cx="50%" cy="22%" r="68%">
+        <radialGradient id={sheenId} cx="50%" cy="22%" r="68%">
           <stop offset="0%" stopColor="#FFF7ED" stopOpacity="0.1" />
           <stop offset="100%" stopColor="#FFF7ED" stopOpacity="0" />
         </radialGradient>
-        <linearGradient id="cueFoxFur" x1="0%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id={furId} x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stopColor="#FDBA74" />
           <stop offset="65%" stopColor="#FB923C" />
           <stop offset="100%" stopColor="#EA580C" />
         </linearGradient>
-        <linearGradient id="cueFoxCream" x1="0%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id={creamId} x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stopColor="#FFFDF9" />
           <stop offset="100%" stopColor="#FFEDD5" />
         </linearGradient>
       </defs>
 
       {/* Soft warm spotlight */}
-      <circle cx="50" cy="50" r="49" fill="url(#cueFoxStageSheen)" />
+      <circle cx="50" cy="50" r="49" fill={`url(#${sheenId})`} />
 
       {/* Subtle bottom rim ledge paws grip in idle / typing */}
       {(mood === "idle" || mood === "typing") && (
@@ -145,8 +149,8 @@ export function CueMascotFox({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
       <g className="cue-spring-move" style={{ transform: stageTransform, transformOrigin: "50px 55px" }}>
         <g className={mood === "idle" ? "animate-cue-idle-bob" : mood === "listening" ? "animate-cue-listen-sway" : ""}>
           {/* Fox Torso + Scalloped Cream Shopkeeper Chest Bib */}
-          <path d="M 30 100 C 30 70 37 62 50 62 C 63 62 70 70 70 100 Z" fill="url(#cueFoxFur)" />
-          <path d="M 39 64 Q 50 67 61 64 L 58 84 L 54 79 L 50 86 L 46 79 L 42 84 Z" fill="url(#cueFoxCream)" />
+          <path d="M 30 100 C 30 70 37 62 50 62 C 63 62 70 70 70 100 Z" fill={`url(#${furId})`} />
+          <path d="M 39 64 Q 50 67 61 64 L 58 84 L 54 79 L 50 86 L 46 79 L 42 84 Z" fill={`url(#${creamId})`} />
 
           {/* Shopkeeper Neck Strap + Golden Lucky Bell */}
           <path d="M 35 63.5 Q 50 69 65 63.5" fill="none" stroke="#431407" strokeWidth="2.6" strokeLinecap="round" />
@@ -162,26 +166,26 @@ export function CueMascotFox({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProp
             <g className="cue-spring-move" style={{ transform: leftEarTransform, transformOrigin: "31px 35px" }}>
               <path d="M 23 39 L 19 14 L 41 31 Z" fill="#FB923C" stroke="#EA580C" strokeWidth="0.6" strokeLinejoin="round" />
               <path d="M 21.6 22.8 L 19 14 L 28.4 20.9 Z" fill="#292524" />
-              <path d="M 25.5 36 L 23.2 21.5 L 36.2 31 Z" fill="url(#cueFoxCream)" />
+              <path d="M 25.5 36 L 23.2 21.5 L 36.2 31 Z" fill={`url(#${creamId})`} />
             </g>
 
             {/* Right Pointed Fox Ear with Espresso Tip */}
             <g className="cue-spring-move" style={{ transform: rightEarTransform, transformOrigin: "69px 35px" }}>
               <path d="M 77 39 L 81 14 L 59 31 Z" fill="#FB923C" stroke="#EA580C" strokeWidth="0.6" strokeLinejoin="round" />
               <path d="M 78.4 22.8 L 81 14 L 71.6 20.9 Z" fill="#292524" />
-              <path d="M 74.5 36 L 76.8 21.5 L 63.8 31 Z" fill="url(#cueFoxCream)" />
+              <path d="M 74.5 36 L 76.8 21.5 L 63.8 31 Z" fill={`url(#${creamId})`} />
             </g>
 
             {/* Head Silhouette with Cute Pointed Cheek Fur Tufts */}
             <path
               d="M 50 28 C 66 28 74 36 74 44 L 81 48 L 76 52.5 L 79 56.5 C 70 63.5 60 66.5 50 66.5 C 40 66.5 30 63.5 21 56.5 L 24 52.5 L 19 48 L 26 44 C 26 36 34 28 50 28 Z"
-              fill="url(#cueFoxFur)"
+              fill={`url(#${furId})`}
             />
 
             {/* Cream Fox Cheek Mask (classic fox V-crest dipping to nose bridge!) */}
             <path
               d="M 22 55.5 Q 32 49 45 54 Q 50 56 55 54 Q 68 49 78 55.5 C 70 63 60 66.5 50 66.5 C 40 66.5 30 63 22 55.5 Z"
-              fill="url(#cueFoxCream)"
+              fill={`url(#${creamId})`}
             />
 
             {/* Little Forehead Flame/Diamond Mark */}

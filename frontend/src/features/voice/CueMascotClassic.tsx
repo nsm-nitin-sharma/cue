@@ -1,10 +1,14 @@
 "use client";
 
-import React from "react";
+import React, { useId } from "react";
 import type { CueMascotProps } from "@/features/voice/CueMascot";
 
 /** Option 1 ("classic"): Cozy marshmallow plush Cue buddy — preserved intact for instant revert. */
 export function CueMascotClassic({ mood, lookX = 0, audioEnergy = 0 }: CueMascotProps) {
+  const uid = useId();
+  const sheenId = `${uid}-sheen`;
+  const bodyId = `${uid}-body`;
+  const earId = `${uid}-ear`;
   const clampedX = Math.max(-1, Math.min(1, lookX));
 
   const stageTransform =
@@ -77,22 +81,22 @@ export function CueMascotClassic({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
       className="relative z-10 w-full h-full select-none pointer-events-none overflow-visible"
     >
       <defs>
-        <radialGradient id="cueStageSheen" cx="50%" cy="22%" r="65%">
+        <radialGradient id={sheenId} cx="50%" cy="22%" r="65%">
           <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.11" />
           <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
         </radialGradient>
-        <linearGradient id="cueBodyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id={bodyId} x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stopColor="#FFFFFF" />
           <stop offset="72%" stopColor="#F8FAFC" />
           <stop offset="100%" stopColor="#E2E8F0" />
         </linearGradient>
-        <linearGradient id="cueEarInner" x1="0%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id={earId} x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stopColor="#FFE4E6" />
           <stop offset="100%" stopColor="#FECDD3" />
         </linearGradient>
       </defs>
 
-      <circle cx="50" cy="50" r="49" fill="url(#cueStageSheen)" />
+      <circle cx="50" cy="50" r="49" fill={`url(#${sheenId})`} />
 
       {(mood === "idle" || mood === "typing") && (
         <path
@@ -158,7 +162,7 @@ export function CueMascotClassic({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
 
       <g className="cue-spring-move" style={{ transform: stageTransform, transformOrigin: "50px 55px" }}>
         <g className={mood === "idle" ? "animate-cue-idle-bob" : mood === "listening" ? "animate-cue-listen-sway" : ""}>
-          <path d="M 27 100 C 27 72 36 62 50 62 C 64 62 73 72 73 100 Z" fill="url(#cueBodyGrad)" />
+          <path d="M 27 100 C 27 72 36 62 50 62 C 64 62 73 72 73 100 Z" fill={`url(#${bodyId})`} />
           <path
             d="M 52.8 77.5 A 4.2 4.2 0 1 0 52.8 83.2"
             fill="none"
@@ -169,13 +173,13 @@ export function CueMascotClassic({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
 
           <g className="cue-gaze-move" style={{ transform: headTransform, transformOrigin: "50px 52px" }}>
             <g className="cue-spring-move" style={{ transform: earLeftTransform, transformOrigin: "26px 47px" }}>
-              <ellipse cx="22.5" cy="46.5" rx="7.5" ry="12.5" fill="url(#cueBodyGrad)" />
-              <ellipse cx="23.2" cy="47" rx="4" ry="8" fill="url(#cueEarInner)" />
+              <ellipse cx="22.5" cy="46.5" rx="7.5" ry="12.5" fill={`url(#${bodyId})`} />
+              <ellipse cx="23.2" cy="47" rx="4" ry="8" fill={`url(#${earId})`} />
             </g>
 
             <g className="cue-spring-move" style={{ transform: earRightTransform, transformOrigin: "74px 47px" }}>
-              <ellipse cx="77.5" cy="46.5" rx="7.5" ry="12.5" fill="url(#cueBodyGrad)" />
-              <ellipse cx="76.8" cy="47" rx="4" ry="8" fill="url(#cueEarInner)" />
+              <ellipse cx="77.5" cy="46.5" rx="7.5" ry="12.5" fill={`url(#${bodyId})`} />
+              <ellipse cx="76.8" cy="47" rx="4" ry="8" fill={`url(#${earId})`} />
             </g>
 
             <path
@@ -186,7 +190,7 @@ export function CueMascotClassic({ mood, lookX = 0, audioEnergy = 0 }: CueMascot
               strokeLinecap="round"
             />
 
-            <rect x="24" y="25" width="52" height="45" rx="22" fill="url(#cueBodyGrad)" />
+            <rect x="24" y="25" width="52" height="45" rx="22" fill={`url(#${bodyId})`} />
             <path
               d="M 29 61 Q 50 69 71 61"
               fill="none"

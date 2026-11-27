@@ -1,5 +1,7 @@
 export type LanguageMode = "hinglish" | "hi" | "en";
 
+export type MascotVariant = "fox" | "classic";
+
 export type VoicePhase =
   | "idle"
   | "listening"
