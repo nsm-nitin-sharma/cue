@@ -113,7 +113,7 @@ def _tokens_match_product(q_tokens: list[str], p_tokens: list[str]) -> bool:
             or ht == pt
             or qt in pt
             or ht in pt
-            or (len(qt) >= 4 and len(pt) >= 4 and fuzz.ratio(qt, pt) >= 82)
+            or (len(qt) >= 4 and len(pt) >= 4 and fuzz.ratio(qt, pt) >= 72)
             for pt in p_tokens
         )
         if not matched:
@@ -246,6 +246,26 @@ def resolve_product(
             candidates=[scored[0][1]],
             spoken_term=query,
         )
+
+    # If explicit size didn't match any SKU, check if base product name matches existing variants
+    # so Cue asks clarification ("Kya inmein se koi?") instead of assuming a brand-new unrelated product.
+    if q_sizes:
+        size_alt_matches: list[dict[str, Any]] = []
+        for p in products:
+            core_p = _strip_packaging(_normalize_units(normalize_text(p["name"])))
+            p_words = core_p.split()
+            if (
+                _tokens_match_product(core_q_words, p_words)
+                or _tokens_match_product(hinted_q_words, p_words)
+                or fuzz.WRatio(core_q, core_p) >= 80
+            ):
+                size_alt_matches.append(p)
+        if size_alt_matches:
+            return ProductResolution(
+                status="not_found",
+                candidates=size_alt_matches[:4],
+                spoken_term=query,
+            )
 
     return ProductResolution(status="not_found", spoken_term=query)
 

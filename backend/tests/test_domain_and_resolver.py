@@ -444,3 +444,12 @@ def test_devanagari_variant_reply_and_repeated_disambiguation():
 
     picked = resolve_short_variant_reply("मेगी मसाला 70 gram", cands)
     assert picked is not None and picked["id"] == "m70"
+
+    # Spelling variation ("Meggie Masala 500 Gram") when only 250g/70g exist surfaces existing variants for clarification
+    size_miss = resolve_product("Meggie Masala 500 Gram", cands, [])
+    assert size_miss.status == "not_found"
+    assert size_miss.candidates and {c["id"] for c in size_miss.candidates} == {"m250", "m70"}
+
+    # Spelling variation ("Meggie Masala 500 Gram") when "Maggi Masala 500g" exists asks clarification instead of not_found
+    with_500 = resolve_product("Meggie Masala 500 Gram", [{"id": "m500", "name": "Maggi Masala 500g", "base_unit": "packet"}], [])
+    assert with_500.status in {"exact", "verify_alias"} and with_500.product["id"] == "m500"

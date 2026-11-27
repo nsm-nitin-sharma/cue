@@ -1443,6 +1443,62 @@ class VoicePipelineService:
                         )
                         self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, raw_transcript, language, stt_provider, stt_confidence, op.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
                         return res
+                    elif pres.status == "not_found" and pres.candidates:
+                        remaining = [item.model_dump() for item in operations[idx + 1 :]]
+                        if remaining:
+                            context_state["pending_batch_items"] = remaining
+                        item_name = (op.product_query or "New Product").title()
+                        draft = {
+                            "intent": op.intent,
+                            "quantity": op.quantity or 1,
+                            "unit_price": op.unit_price,
+                            "payment_status": op.payment_status or "paid",
+                            "payment_method": inferred_pm,
+                            "paid_amount": op.paid_amount,
+                            "customer_query": op.customer_query,
+                            "notes": op.notes,
+                            "transaction_date": txn_date_str,
+                        }
+                        context_state["pending_flow"] = {
+                            "type": "disambiguate_product",
+                            "candidate_ids": [str(c["id"]) for c in pres.candidates],
+                            "draft": draft,
+                        }
+                        names = " ya ".join(c["name"] for c in pres.candidates)
+                        msg = (
+                            f"'{item_name}' nahi mila, par milta-julta item maujood hai: {names}. "
+                            "Kya inmein se kisi ki baat kar rahe hain, ya naya product add karun?"
+                        )
+                        res = VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=(f"{' '.join(replies)} {msg}".strip()),
+                            language=language,  # type: ignore[arg-type]
+                            receipts=receipts,
+                            clarification={
+                                "kind": "disambiguate_product",
+                                "prompt": msg,
+                                "candidates": [
+                                    *[
+                                        {
+                                            "id": str(c["id"]),
+                                            "label": c["name"],
+                                            "meta": f"Stock: {c.get('current_stock', 0):g} · ₹{float(c.get('default_selling_price', 0)):g}",
+                                            "value": c["name"],
+                                        }
+                                        for c in pres.candidates
+                                    ],
+                                    {
+                                        "id": "add-new",
+                                        "label": f"+ Add New: {item_name}",
+                                        "value": f"Naya product {item_name} add karo",
+                                    },
+                                ],
+                            },
+                        )
+                        self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, raw_transcript, language, stt_provider, stt_confidence, op.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
+                        return res
                     else:
                         # Brand-new unlisted product -> Voice prompt + interactive screen pop-up!
                         item_name = (op.product_query or "New Product").title()
