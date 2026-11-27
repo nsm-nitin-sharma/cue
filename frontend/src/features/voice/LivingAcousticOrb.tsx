@@ -394,15 +394,19 @@ export function LivingAcousticOrb() {
           />
 
           <span
-            className={`absolute ${USE_LARGE_JIGGLY_ORB ? "w-[104px] h-[104px]" : "w-20 h-20"} rounded-full border border-vermilion/25 pointer-events-none transition-transform duration-75 ${
-              isRecording ? "" : "animate-halo-outer"
+            className={`absolute ${
+              USE_LARGE_JIGGLY_ORB ? "w-[106px] h-[106px] animate-orb-jiggle" : "w-20 h-20"
+            } rounded-full border border-vermilion/25 pointer-events-none transition-transform duration-75 ${
+              isRecording ? "" : USE_LARGE_JIGGLY_ORB ? "" : "animate-halo-outer"
             }`}
             style={isRecording ? { transform: `scale(${ring2Scale})`, opacity: 0.25 + audioEnergy * 0.45 } : undefined}
           />
 
           <span
-            className={`absolute ${USE_LARGE_JIGGLY_ORB ? "w-[104px] h-[104px]" : "w-20 h-20"} rounded-full bg-vermilion/10 pointer-events-none transition-transform duration-75 ${
-              isRecording ? "" : "animate-halo-idle"
+            className={`absolute ${
+              USE_LARGE_JIGGLY_ORB ? "w-[106px] h-[106px] animate-orb-jiggle" : "w-20 h-20"
+            } rounded-full bg-vermilion/10 pointer-events-none transition-transform duration-75 ${
+              isRecording ? "" : USE_LARGE_JIGGLY_ORB ? "" : "animate-halo-idle"
             }`}
             style={isRecording ? { transform: `scale(${ring1Scale})`, opacity: 0.35 + audioEnergy * 0.5 } : undefined}
           />
@@ -421,10 +425,10 @@ export function LivingAcousticOrb() {
             className={`group relative ${
               USE_LARGE_JIGGLY_ORB
                 ? "w-[96px] h-[96px] orb-spring-transition hover:scale-110 active:scale-90"
-                : "w-[76px] h-[76px] transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out"
-            } rounded-full flex flex-col items-center justify-center overflow-hidden shadow-orb border ${
+                : "w-[76px] h-[76px] rounded-full transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out"
+            } flex flex-col items-center justify-center overflow-hidden shadow-orb border ${
               isProcessing
-                ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95"
+                ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95 rounded-full"
                 : isRecording
                   ? USE_LARGE_JIGGLY_ORB
                     ? "bg-vermilion border-vermilion text-white animate-orb-jiggle-active"
@@ -438,11 +442,11 @@ export function LivingAcousticOrb() {
               <>
                 <span
                   aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-b from-[#1E293B] to-ink"
+                  className={`pointer-events-none absolute inset-0 ${USE_LARGE_JIGGLY_ORB ? "rounded-[inherit]" : "rounded-full"} bg-gradient-to-b from-[#1E293B] to-ink`}
                 />
                 <span
                   aria-hidden="true"
-                  className={`pointer-events-none absolute inset-0 rounded-full bg-gradient-to-b from-vermilion to-[#C93B1F] transition-opacity duration-300 ease-out ${
+                  className={`pointer-events-none absolute inset-0 ${USE_LARGE_JIGGLY_ORB ? "rounded-[inherit]" : "rounded-full"} bg-gradient-to-b from-vermilion to-[#C93B1F] transition-opacity duration-300 ease-out ${
                     isRecording ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                   }`}
                 />
