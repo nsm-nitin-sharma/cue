@@ -1,0 +1,393 @@
+import uuid
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.api.deps import get_active_business_id, get_current_user
+from app.core.config import get_settings
+from app.core.time_utils import get_business_today
+from app.db.supabase_client import get_admin_supabase
+from app.domain.schemas.intents import (
+    ManualCustomerPaymentRequest,
+    ManualExpenseRequest,
+    ManualProductRequest,
+    OnboardStoreRequest,
+    UpdateCustomerRequest,
+    UpdateExpenseRequest,
+    UpdateProductRequest,
+)
+from app.services.analytics_foundation import AnalyticsFoundationService
+from app.services.memory_30d import Memory30DService
+from app.services.transaction_engine import TransactionEngine
+
+router = APIRouter(tags=["workspace"])
+
+
+@router.get("/health")
+def health_check() -> dict:
+    settings = get_settings()
+    db_ready = False
+    try:
+        db = get_admin_supabase()
+        db.table("subscription_plans").select("code").limit(1).execute()
+        db_ready = True
+    except Exception:
+        db_ready = False
+    return {
+        "status": "ok",
+        "stt_provider": settings.STT_PROVIDER,
+        "llm_provider": settings.LLM_PROVIDER,
+        "database_schema_ready": db_ready,
+    }
+
+
+@router.get("/subscriptions/plans")
+def list_plans() -> dict:
+    db = get_admin_supabase()
+    res = db.table("subscription_plans").select("*").eq("is_active", True).execute()
+    return {"plans": res.data or []}
+
+
+@router.post("/onboarding/store")
+def onboard_store(
+    req: OnboardStoreRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    db = get_admin_supabase()
+    existing = (
+        db.table("business_members")
+        .select("business_id")
+        .eq("user_id", user["user_id"])
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return {"business_id": existing.data[0]["business_id"], "already_onboarded": True}
+
+    res = db.rpc(
+        "rpc_onboard_business",
+        {
+            "p_user_id": user["user_id"],
+            "p_name": req.name,
+            "p_city": req.city,
+            "p_plan_code": req.plan_code,
+            "p_seed_sample_catalog": req.seed_sample_catalog,
+        },
+    ).execute()
+    return res.data
+
+
+@router.get("/workspace/bootstrap")
+def get_workspace_bootstrap(
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    db = get_admin_supabase()
+    biz = db.table("businesses").select("*").eq("id", business_id).limit(1).execute().data[0]
+    sub = (
+        db.table("business_subscriptions")
+        .select("*, subscription_plans(*)")
+        .eq("business_id", business_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    prods = (
+        db.table("products")
+        .select("*, inventory(current_quantity), product_aliases(alias_text)")
+        .eq("business_id", business_id)
+        .eq("is_active", True)
+        .order("name")
+        .execute()
+        .data
+        or []
+    )
+    movements = (
+        db.table("inventory_movements")
+        .select("*, products(name)")
+        .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .limit(80)
+        .execute()
+        .data
+        or []
+    )
+    customers = (
+        db.table("customers")
+        .select("*")
+        .eq("business_id", business_id)
+        .eq("is_active", True)
+        .order("name")
+        .execute()
+        .data
+        or []
+    )
+    sales = (
+        db.table("sales")
+        .select("*, customers(name), sale_items(*, products(name))")
+        .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .limit(80)
+        .execute()
+        .data
+        or []
+    )
+    expenses = (
+        db.table("expenses")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .limit(80)
+        .execute()
+        .data
+        or []
+    )
+    customer_payments = (
+        db.table("customer_payments")
+        .select("*, customers(name)")
+        .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .limit(80)
+        .execute()
+        .data
+        or []
+    )
+
+    mem = Memory30DService(db)
+    convs = mem.list_30d_conversations(business_id=business_id, timezone_name=biz.get("timezone", "Asia/Kolkata"))
+    if not convs:
+        mem.get_or_create_day_conversation(business_id=business_id, timezone_name=biz.get("timezone", "Asia/Kolkata"))
+        convs = mem.list_30d_conversations(business_id=business_id, timezone_name=biz.get("timezone", "Asia/Kolkata"))
+
+    msgs = (
+        db.table("conversation_messages")
+        .select("*")
+        .eq("business_id", business_id)
+        .in_("conversation_date", [c["conversation_date"] for c in convs])
+        .order("created_at", desc=False)
+        .execute()
+        .data
+        or []
+    )
+
+    return {
+        "business": biz,
+        "subscription": sub[0] if sub else None,
+        "products": prods,
+        "movements": movements,
+        "customers": customers,
+        "sales": sales,
+        "expenses": expenses,
+        "customer_payments": customer_payments,
+        "conversations": convs,
+        "messages": msgs,
+        "bi_foundation": AnalyticsFoundationService(db).get_readiness_summary(business_id=business_id),
+    }
+
+
+@router.post("/inventory/products")
+def add_manual_product(
+    req: ManualProductRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    db = get_admin_supabase()
+    tx = TransactionEngine(db)
+    op_id = str(uuid.uuid4())
+    created = tx.create_product_and_stock(
+        business_id=business_id,
+        user_id=user["user_id"],
+        name=req.name,
+        category=req.category,
+        base_unit=req.base_unit,
+        cost_price=req.cost_price,
+        selling_price=req.selling_price,
+        low_stock_threshold=req.low_stock_threshold,
+        opening_qty=req.stock,
+        transaction_date=get_business_today().isoformat(),
+        operation_id=op_id,
+    )
+    for al in req.aliases:
+        tx.save_verified_alias(business_id=business_id, product_id=created["product"]["id"], alias_text=al)
+    return created
+
+
+@router.patch("/inventory/products/{product_id}")
+def update_manual_product(
+    product_id: str,
+    req: UpdateProductRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.edit_product(
+        business_id=business_id,
+        user_id=user["user_id"],
+        product_id=product_id,
+        name=req.name,
+        category=req.category,
+        base_unit=req.base_unit,
+        cost_price=req.cost_price,
+        selling_price=req.selling_price,
+        stock=req.stock,
+        low_stock_threshold=req.low_stock_threshold,
+        aliases=req.aliases,
+        transaction_date=get_business_today().isoformat(),
+        operation_id=str(uuid.uuid4()),
+    )
+
+
+@router.patch("/customers/{customer_id}")
+def update_manual_customer(
+    customer_id: str,
+    req: UpdateCustomerRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    _ = user
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.update_customer(
+        business_id=business_id,
+        customer_id=customer_id,
+        name=req.name,
+        phone=req.phone,
+        area_note=req.area_note,
+    )
+
+
+@router.patch("/expenses/{expense_id}")
+def update_manual_expense(
+    expense_id: str,
+    req: UpdateExpenseRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.correct_last_expense(
+        business_id=business_id,
+        user_id=user["user_id"],
+        expense_id=expense_id,
+        operation_id=str(uuid.uuid4()),
+        transaction_date=req.transaction_date or get_business_today().isoformat(),
+        new_category=req.category,
+        new_amount=req.amount,
+        new_payment_method=req.payment_method,
+        new_description=req.description,
+    )
+
+
+@router.post("/expenses")
+def add_manual_expense(
+    req: ManualExpenseRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.record_expense(
+        business_id=business_id,
+        user_id=user["user_id"],
+        category=req.category,
+        description=req.description,
+        amount=req.amount,
+        payment_method=req.payment_method,
+        transaction_date=req.transaction_date or get_business_today().isoformat(),
+        operation_id=str(uuid.uuid4()),
+    )
+
+
+@router.post("/customers/payments")
+def add_manual_payment(
+    req: ManualCustomerPaymentRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    return tx.record_customer_payment(
+        business_id=business_id,
+        user_id=user["user_id"],
+        customer_id=req.customer_id,
+        amount=req.amount,
+        payment_method=req.payment_method,
+        transaction_date=get_business_today().isoformat(),
+        operation_id=str(uuid.uuid4()),
+    )
+
+
+@router.post("/inventory/products/{product_id}/archive")
+def archive_inventory_product(
+    product_id: str,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    tx.archive_product(business_id=business_id, product_id=product_id)
+    return {"status": "archived", "product_id": product_id}
+
+
+@router.post("/inventory/clear-unused")
+def clear_unused_inventory_products(
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    archived_count = tx.archive_unused_products(business_id=business_id)
+    return {"status": "ok", "archived_count": archived_count}
+
+
+@router.post("/operations/{operation_id}/reverse")
+def reverse_business_operation(
+    operation_id: str,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    res = tx.reverse_operation(
+        business_id=business_id,
+        user_id=user["user_id"],
+        operation_id=operation_id,
+        reversal_operation_id=str(uuid.uuid4()),
+        transaction_date=get_business_today().isoformat(),
+    )
+    return {"status": "undone" if res["reversed"] else "noop", **res}
+
+
+@router.delete("/account")
+def delete_user_account(user: dict = Depends(get_current_user)) -> dict:
+    """Permanently deletes the authenticated owner's store data and auth user so they can restart cleanly."""
+    db = get_admin_supabase()
+    uid = str(user["user_id"])
+    owned = (
+        db.table("businesses")
+        .select("id")
+        .eq("owner_id", uid)
+        .execute()
+        .data
+        or []
+    )
+    biz_ids = [str(b["id"]) for b in owned]
+    if biz_ids:
+        child_tables = [
+            "sale_items",
+            "sales",
+            "customer_payments",
+            "inventory_movements",
+            "expenses",
+            "conversation_messages",
+            "conversations",
+            "voice_transactions",
+            "pending_confirmations",
+            "business_insights_events",
+            "inventory",
+            "product_aliases",
+            "product_unit_conversions",
+            "products",
+            "customers",
+            "business_subscriptions",
+            "business_members",
+        ]
+        for tbl in child_tables:
+            db.table(tbl).delete().in_("business_id", biz_ids).execute()
+        db.table("businesses").delete().in_("id", biz_ids).execute()
+
+    db.table("business_members").delete().eq("user_id", uid).execute()
+    db.delete_auth_user(uid)
+    return {"status": "deleted", "user_id": uid}

@@ -1,0 +1,220 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    background-color: #F7F8FA;
+    color: #0F172A;
+    overscroll-behavior-x: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #F7F8FA;
+    color: #0F172A;
+    overscroll-behavior-x: none;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Institutional ledger receipt card */
+.receipt-slip {
+  position: relative;
+  background: #FFFFFF;
+  border: 1px solid #E4E7EC;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.03);
+}
+
+.receipt-slip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 12px 0 0 12px;
+  background: var(--slip-accent, #15803D);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D0D5DD;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #98A2B3;
+}
+
+@keyframes pageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes panelExpand {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fadeBackdrop {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes drawerLeft {
+  from {
+    opacity: 0.6;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes drawerRight {
+  from {
+    opacity: 0.6;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes orbBreathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18), 0 0 0 0 rgba(225, 77, 42, 0.24);
+  }
+  50% {
+    transform: scale(1.045);
+    box-shadow: 0 12px 32px rgba(225, 77, 42, 0.22), 0 0 0 12px rgba(225, 77, 42, 0);
+  }
+}
+
+@keyframes orbHaloRotate {
+  0% {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.45;
+  }
+  50% {
+    transform: rotate(180deg) scale(1.1);
+    opacity: 0.85;
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+    opacity: 0.45;
+  }
+}
+
+@keyframes orbWavePulse {
+  0%, 100% {
+    transform: scaleY(0.45);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.animate-page-enter {
+  animation: pageEnter 440ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+@keyframes tabSlideFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(36px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes tabSlideFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-36px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-tab-from-right {
+  animation: tabSlideFromRight 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-tab-from-left {
+  animation: tabSlideFromLeft 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-panel-expand {
+  animation: panelExpand 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-fade-backdrop {
+  animation: fadeBackdrop 220ms ease-out both;
+}
+
+.animate-drawer-left {
+  animation: drawerLeft 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-drawer-right {
+  animation: drawerRight 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-orb-breathe {
+  animation: orbBreathe 2.8s ease-in-out infinite;
+}
+
+.animate-orb-halo {
+  animation: orbHaloRotate 7s linear infinite;
+}
+
+.animate-orb-wave {
+  animation: orbWavePulse 1.4s ease-in-out infinite;
+}
