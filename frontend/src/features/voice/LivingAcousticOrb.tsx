@@ -82,6 +82,8 @@ export function LivingAcousticOrb() {
     setVoicePhase,
     statusMessage,
     submitCommand,
+    submitAudioTurn,
+    isLiveBackend,
     isOffline,
   } = useCueWorkspace();
 
@@ -94,6 +96,8 @@ export function LivingAcousticOrb() {
   const [micError, setMicError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const mimeTypeRef = useRef<string>("audio/webm");
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -114,8 +118,30 @@ export function LivingAcousticOrb() {
       // Ignore already stopped
     }
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
+    const recorder = mediaRecorderRef.current;
+    const capturedText = liveTranscriptRef.current.trim();
+    setLiveTranscript("");
+    liveTranscriptRef.current = "";
+
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current });
+        chunksRef.current = [];
+        if (isLiveBackend && blob.size > 400) {
+          submitAudioTurn(blob, capturedText);
+        } else if (capturedText) {
+          setVoicePhase("transcribing");
+          submitCommand(capturedText);
+        } else {
+          setVoicePhase("idle");
+        }
+      };
+      recorder.stop();
+    } else if (capturedText) {
+      setVoicePhase("transcribing");
+      submitCommand(capturedText);
+    } else {
+      setVoicePhase("idle");
     }
 
     if (streamRef.current) {
@@ -127,17 +153,7 @@ export function LivingAcousticOrb() {
       audioCtxRef.current.close().catch(() => {});
       audioCtxRef.current = null;
     }
-
-    const captured = liveTranscriptRef.current.trim();
-    if (captured) {
-      setVoicePhase("transcribing");
-      setLiveTranscript("");
-      liveTranscriptRef.current = "";
-      submitCommand(captured);
-    } else {
-      setVoicePhase("idle");
-    }
-  }, [setVoicePhase, submitCommand]);
+  }, [isLiveBackend, setVoicePhase, submitAudioTurn, submitCommand]);
 
   const startRecording = useCallback(async () => {
     stopSpeaking();
@@ -164,6 +180,11 @@ export function LivingAcousticOrb() {
         stream,
         MediaRecorder.isTypeSupported(mimeType) ? { mimeType } : undefined
       );
+      chunksRef.current = [];
+      mimeTypeRef.current = mimeType;
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
+      };
       mediaRecorderRef.current = recorder;
       recorder.start(250);
 

@@ -9,6 +9,15 @@ import {
 } from "@/lib/offlineQueue";
 import { formatINR, formatQty, formatTimeIST, getTodayIST, makeOperationId } from "@/lib/format";
 import { speakReply, stopSpeaking } from "@/lib/tts";
+import { supabase } from "@/lib/supabase";
+import {
+  confirmTier3Remote,
+  createProductFromPopupRemote,
+  fetchWorkspaceBootstrap,
+  sendTextCommandRemote,
+  sendVoiceAudioTurn,
+  syncOfflineBatchRemote,
+} from "@/lib/api";
 import type {
   BaseUnit,
   ChatEntry,
@@ -27,6 +36,7 @@ import type {
   StoreProfile,
   SubscriptionTierCode,
   VoicePhase,
+  VoiceTurnResult,
 } from "@/types/cue";
 
 interface PendingSlotDraft {
@@ -86,6 +96,8 @@ interface CueWorkspaceContextValue {
   pendingConfirmation: PendingConfirmation | null;
   confirmPendingHighValue: () => void;
   cancelPendingHighValue: () => void;
+  isLiveBackend: boolean;
+  submitAudioTurn: (audioBlob: Blob, fallbackTranscript?: string) => Promise<void>;
   submitCommand: (rawText: string, opts?: { fromOfflineSync?: boolean; operationId?: string }) => Promise<void>;
   selectClarificationCandidate: (candidate: ClarificationCandidate) => void;
   undoReceipt: (operationId: string) => void;
@@ -586,6 +598,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   const [newProductDraft, setNewProductDraft] = useState<NewProductDraft | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [pendingFlow, setPendingFlow] = useState<PendingFlowState>(null);
+  const [isLiveBackend, setIsLiveBackend] = useState<boolean>(false);
 
   // Track last entity / operation in active day context for anaphora & corrections
   const [lastContext, setLastContext] = useState<{
@@ -599,6 +612,108 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     listOfflineCommands().then(setOfflineQueue);
   }, []);
+
+  const refreshLiveWorkspace = useCallback(async () => {
+    if (!supabase) return;
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session) {
+      setIsLiveBackend(false);
+      return;
+    }
+    try {
+      const boot = (await fetchWorkspaceBootstrap()) as Record<string, unknown>;
+      const biz = boot.business as Record<string, unknown> | undefined;
+      const sub = boot.subscription as Record<string, unknown> | undefined;
+      if (biz) {
+        const plan = (sub?.subscription_plans as Record<string, unknown> | undefined) ?? {};
+        const limits = (plan.limits as Record<string, unknown> | undefined) ?? {};
+        const code = (plan.code as SubscriptionTierCode | undefined) ?? "free";
+        setStore({
+          name: String(biz.name ?? "Store"),
+          ownerName: sessionData.session.user.email ?? "Owner",
+          city: String(biz.city ?? ""),
+          timezone: String(biz.timezone ?? "Asia/Kolkata"),
+          tier: code,
+          monthlyVoiceUsed: Number(sub?.monthly_voice_used ?? 0),
+          monthlyVoiceLimit: Number(limits.monthly_voice_turns ?? 250),
+        });
+      }
+      const rawProds = (boot.products as Record<string, unknown>[]) ?? [];
+      setProducts(
+        rawProds.map((p) => {
+          const inv = p.inventory as Record<string, unknown>[] | Record<string, unknown> | null;
+          const stockVal = Array.isArray(inv)
+            ? Number(inv[0]?.current_quantity ?? 0)
+            : Number((inv as Record<string, unknown> | null)?.current_quantity ?? 0);
+          const alList = (p.product_aliases as { alias_text: string }[] | undefined) ?? [];
+          return {
+            id: String(p.id),
+            skuCode: String(p.sku_code ?? ""),
+            name: String(p.name),
+            category: String(p.category ?? "General"),
+            baseUnit: (p.base_unit as BaseUnit) ?? "piece",
+            costPrice: Number(p.default_cost_price ?? 0),
+            sellingPrice: Number(p.default_selling_price ?? 0),
+            stock: stockVal,
+            lowStockThreshold: Number(p.low_stock_threshold ?? 5),
+            aliases: alList.map((a) => a.alias_text),
+          };
+        })
+      );
+      const rawCusts = (boot.customers as Record<string, unknown>[]) ?? [];
+      setCustomers(
+        rawCusts.map((c) => ({
+          id: String(c.id),
+          name: String(c.name),
+          phone: String(c.phone ?? ""),
+          areaNote: String(c.area_note ?? ""),
+          outstandingBalance: Number(c.outstanding_balance ?? 0),
+        }))
+      );
+      const rawConvs = (boot.conversations as Record<string, unknown>[]) ?? [];
+      const rawMsgs = (boot.messages as Record<string, unknown>[]) ?? [];
+      if (rawConvs.length > 0) {
+        setConversations(
+          rawConvs.map((conv) => {
+            const cDate = String(conv.conversation_date);
+            const entries: ChatEntry[] = rawMsgs
+              .filter((m) => String(m.conversation_date) === cDate)
+              .map((m) => {
+                const ui = (m.ui_payload as VoiceTurnResult | null) ?? null;
+                return {
+                  id: String(m.id),
+                  role: (m.role as "user" | "assistant") ?? "assistant",
+                  content: String(m.content),
+                  timestamp: formatTimeIST(String(m.created_at)),
+                  language: (m.language as LanguageMode) ?? "hinglish",
+                  operationId: m.linked_operation_id ? String(m.linked_operation_id) : undefined,
+                  receipt: ui?.receipts?.[0],
+                  clarification: ui?.clarification ?? undefined,
+                };
+              });
+            return {
+              date: cDate,
+              label: formatDayBadge(cDate, todayYmd),
+              summary: String(conv.daily_summary ?? "Daily ledger chat"),
+              entries,
+            };
+          })
+        );
+      }
+      setIsLiveBackend(true);
+    } catch {
+      setIsLiveBackend(false);
+    }
+  }, [todayYmd]);
+
+  useEffect(() => {
+    refreshLiveWorkspace();
+    if (!supabase) return;
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      refreshLiveWorkspace();
+    });
+    return () => sub.subscription.unsubscribe();
+  }, [refreshLiveWorkspace]);
 
   const activeConversation = useMemo(
     () =>
@@ -1147,11 +1262,46 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   );
 
   const confirmNewProductFromModal = useCallback(
-    (draft: NewProductDraft) => {
+    async (draft: NewProductDraft) => {
       const opId = makeOperationId();
       const costPrice = Number(draft.costPrice) || 0;
       const sellingPrice = Number(draft.sellingPrice) || costPrice;
       const lowStockThreshold = Number(draft.lowStockThreshold) || 5;
+
+      if (isLiveBackend) {
+        try {
+          const remote = await createProductFromPopupRemote({
+            operation_id: opId,
+            name: draft.name.trim(),
+            category: draft.category || "General",
+            base_unit: draft.baseUnit,
+            quantity: draft.quantity,
+            cost_price: costPrice,
+            selling_price: sellingPrice,
+            low_stock_threshold: lowStockThreshold,
+            action_kind: draft.actionKind,
+          });
+          setNewProductDraft(null);
+          setPendingFlow(null);
+          appendEntriesToDate(todayYmd, [
+            {
+              id: `ast-${remote.operation_id}`,
+              role: "assistant",
+              content: remote.reply,
+              timestamp: formatTimeIST(new Date().toISOString()),
+              language: remote.language,
+              operationId: remote.operation_id,
+              receipt: remote.receipts?.[0],
+            },
+          ]);
+          speakReply(remote.reply, remote.language, ttsEnabled);
+          await refreshLiveWorkspace();
+          return;
+        } catch {
+          // Fallback to local update if unreachable
+        }
+      }
+
       const newProd: Product = {
         id: `prod-${opId.slice(0, 8)}`,
         skuCode: `NEW-${Math.floor(100 + Math.random() * 899)}`,
@@ -1178,7 +1328,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         notes: "New product created & stocked",
       });
     },
-    [commitStockReceive, todayYmd]
+    [appendEntriesToDate, commitStockReceive, isLiveBackend, refreshLiveWorkspace, todayYmd, ttsEnabled]
   );
 
   const dismissNewProductModal = useCallback(() => {
@@ -1187,10 +1337,34 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     setStatusMessage("Cancelled");
   }, []);
 
-  const confirmPendingHighValue = useCallback(() => {
+  const confirmPendingHighValue = useCallback(async () => {
     if (!pendingConfirmation) return;
-    const { payload, operationId } = pendingConfirmation;
+    const { payload, operationId, token } = pendingConfirmation;
     setPendingConfirmation(null);
+
+    if (isLiveBackend && token && !token.startsWith("tok-")) {
+      try {
+        const remote = await confirmTier3Remote(operationId, token, true);
+        appendEntriesToDate(todayYmd, [
+          {
+            id: `ast-${remote.operation_id}`,
+            role: "assistant",
+            content: remote.reply,
+            timestamp: formatTimeIST(new Date().toISOString()),
+            language: remote.language,
+            operationId: remote.operation_id,
+            receipt: remote.receipts?.[0],
+          },
+        ]);
+        setVoicePhase("saved");
+        setStatusMessage("Confirmed & Saved");
+        speakReply(remote.reply, remote.language, ttsEnabled);
+        await refreshLiveWorkspace();
+        return;
+      } catch {
+        // Fallback if local token
+      }
+    }
 
     if (payload.kind === "receive") {
       const prod = products.find((p) => p.id === payload.productId);
@@ -1273,7 +1447,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         speakReply(reply, language, ttsEnabled);
       }
     }
-  }, [appendEntriesToDate, commitSale, commitStockReceive, customers, language, pendingConfirmation, products, todayYmd, ttsEnabled]);
+  }, [appendEntriesToDate, commitSale, commitStockReceive, customers, isLiveBackend, language, pendingConfirmation, products, refreshLiveWorkspace, todayYmd, ttsEnabled]);
 
   const cancelPendingHighValue = useCallback(() => {
     setPendingConfirmation(null);
@@ -1371,6 +1545,63 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     [appendEntriesToDate, language, movements, sales, todayYmd, ttsEnabled]
   );
 
+  const applyRemoteTurnResult = useCallback(
+    async (res: VoiceTurnResult, opts?: { includeUserTranscript?: boolean }) => {
+      const nowIso = new Date().toISOString();
+      const entriesToAdd: ChatEntry[] = [];
+      if (opts?.includeUserTranscript && res.transcript) {
+        entriesToAdd.push({
+          id: `usr-${res.operation_id}`,
+          role: "user",
+          content: res.transcript,
+          timestamp: formatTimeIST(nowIso),
+          language: res.language,
+          operationId: res.operation_id,
+        });
+      }
+      entriesToAdd.push({
+        id: `ast-${res.operation_id}`,
+        role: "assistant",
+        content: res.reply,
+        timestamp: formatTimeIST(nowIso),
+        language: res.language,
+        operationId: res.operation_id,
+        receipt: res.receipts?.[0],
+        clarification: res.clarification ?? undefined,
+      });
+      appendEntriesToDate(todayYmd, entriesToAdd);
+
+      if (res.new_product_draft) {
+        setNewProductDraft(res.new_product_draft);
+      }
+      if (res.confirmation) {
+        setPendingConfirmation(res.confirmation);
+      }
+
+      setVoicePhase(
+        res.status === "policy_blocked"
+          ? "blocked"
+          : res.status === "needs_clarification" || res.status === "memory_boundary" || res.status === "new_product_popup"
+            ? "clarifying"
+            : res.status === "needs_confirmation"
+              ? "confirming"
+              : res.status === "retry_audio"
+                ? "error"
+                : "saved"
+      );
+      setStatusMessage(
+        res.status === "executed" || res.status === "query_answered"
+          ? "Synced with Ledger"
+          : res.status === "policy_blocked"
+            ? "Blocked by Policy"
+            : "Clarification Needed"
+      );
+      speakReply(res.reply, res.language, ttsEnabled);
+      await refreshLiveWorkspace();
+    },
+    [appendEntriesToDate, refreshLiveWorkspace, todayYmd, ttsEnabled]
+  );
+
   const submitCommand = useCallback(
     async (rawText: string, opts?: { fromOfflineSync?: boolean; operationId?: string }) => {
       const text = rawText.trim();
@@ -1392,6 +1623,18 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
             operationId: opId,
           },
         ]);
+      }
+
+      if (isLiveBackend && !isOffline && !opts?.fromOfflineSync) {
+        try {
+          setVoicePhase("validating");
+          setStatusMessage("Processing via Gemini + Supabase");
+          const remoteRes = await sendTextCommandRemote(text, opId, language);
+          await applyRemoteTurnResult(remoteRes, { includeUserTranscript: false });
+          return;
+        } catch {
+          // Fall through cleanly to local simulator if server unreachable
+        }
       }
 
       // Offline queueing into real IndexedDB
@@ -2219,6 +2462,26 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     const items = await listOfflineCommands();
     if (items.length === 0) return;
     setStatusMessage(`Syncing ${items.length} queued items...`);
+    if (isLiveBackend) {
+      try {
+        await syncOfflineBatchRemote(
+          items.map((it) => ({
+            operation_id: it.operationId,
+            text: it.transcript,
+            language: it.language,
+            conversation_date: it.conversationDate,
+          }))
+        );
+        await clearOfflineQueue();
+        setOfflineQueue([]);
+        setVoicePhase("saved");
+        setStatusMessage("Offline Queue Synced (FIFO)");
+        await refreshLiveWorkspace();
+        return;
+      } catch {
+        // Retry locally if unreachable
+      }
+    }
     for (const item of items) {
       await submitCommand(item.transcript, { fromOfflineSync: true, operationId: item.operationId });
       await removeOfflineCommand(item.id);
@@ -2227,7 +2490,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     setOfflineQueue([]);
     setVoicePhase("saved");
     setStatusMessage("Offline Queue Synced (FIFO)");
-  }, [submitCommand]);
+  }, [isLiveBackend, refreshLiveWorkspace, submitCommand]);
 
   useEffect(() => {
     if (!isOffline && offlineQueue.length > 0) {
@@ -2309,6 +2572,31 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     };
   }, [customers, expenses, movements, products, sales, todayYmd]);
 
+  const submitAudioTurn = useCallback(
+    async (audioBlob: Blob, fallbackTranscript?: string) => {
+      stopSpeaking();
+      const opId = makeOperationId();
+      if (isLiveBackend && !isOffline && audioBlob.size > 400) {
+        try {
+          setVoicePhase("transcribing");
+          setStatusMessage("Groq Whisper Transcribing...");
+          const res = await sendVoiceAudioTurn(audioBlob, opId, language);
+          await applyRemoteTurnResult(res, { includeUserTranscript: true });
+          return;
+        } catch {
+          // Graceful fallback to live SpeechRecognition transcript if API unreachable
+        }
+      }
+      if (fallbackTranscript && fallbackTranscript.trim()) {
+        await submitCommand(fallbackTranscript, { operationId: opId });
+      } else {
+        setVoicePhase("idle");
+        setStatusMessage("Ready to listen");
+      }
+    },
+    [applyRemoteTurnResult, isLiveBackend, isOffline, language, submitCommand]
+  );
+
   return (
     <CueWorkspaceContext.Provider
       value={{
@@ -2341,6 +2629,8 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         pendingConfirmation,
         confirmPendingHighValue,
         cancelPendingHighValue,
+        isLiveBackend,
+        submitAudioTurn,
         submitCommand,
         selectClarificationCandidate,
         undoReceipt,

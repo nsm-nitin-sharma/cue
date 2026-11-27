@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, ArrowRight, Store } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
+import { onboardStoreRemote } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 import type { SubscriptionTierCode } from "@/types/cue";
 
 const PLANS: {
@@ -67,10 +69,25 @@ export default function OnboardingPage() {
   const [ownerName, setOwnerName] = useState(store.ownerName);
   const [city, setCity] = useState(store.city);
 
-  const handleActivate = (e: React.FormEvent) => {
+  const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
     setStoreTier(selectedTier);
     updateStoreProfile({ name: storeName, ownerName, city });
+    try {
+      if (supabase) {
+        const { data } = await supabase.auth.getSession();
+        if (data.session) {
+          await onboardStoreRemote({
+            name: storeName,
+            city,
+            plan_code: selectedTier,
+            seed_sample_catalog: true,
+          });
+        }
+      }
+    } catch {
+      // Smooth local continuation if DB migrations haven't been run yet
+    }
     router.push("/");
   };
 

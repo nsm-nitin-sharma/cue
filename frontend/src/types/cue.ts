@@ -192,3 +192,33 @@ export interface StoreProfile {
   monthlyVoiceUsed: number;
   monthlyVoiceLimit: number;
 }
+
+export interface VoiceTurnResult {
+  operation_id: string;
+  status:
+    | "executed"
+    | "needs_clarification"
+    | "needs_confirmation"
+    | "new_product_popup"
+    | "policy_blocked"
+    | "memory_boundary"
+    | "retry_audio"
+    | "query_answered";
+  transcript: string;
+  reply: string;
+  language: LanguageMode;
+  receipts: ReceiptSlip[];
+  clarification?: {
+    kind:
+      | "disambiguate_product"
+      | "disambiguate_customer"
+      | "verify_alias"
+      | "missing_slot"
+      | "negative_stock"
+      | "memory_boundary";
+    prompt: string;
+    candidates?: ClarificationCandidate[];
+  } | null;
+  confirmation?: PendingConfirmation | null;
+  new_product_draft?: NewProductDraft | null;
+}
