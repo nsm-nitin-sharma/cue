@@ -43,6 +43,7 @@
 - [x] Browser `MediaRecorder` capture with cross-browser codec negotiation (`webm/opus` → `webm` → `mp4`)
 - [x] Web Audio API live frequency waveform + RMS silence/noise pre-check
 - [x] Browser `SpeechSynthesis` spoken responses (`hi-IN` / `en-IN` voices + mute/replay controls)
+- [x] **Voice Barge-In / Auto-Stop TTS:** Cue immediately stops speaking whenever the user starts speaking or activates the mic
 - [ ] **Modular `STTProvider` Interface:**
   - [ ] Default: **Groq Free Tier Whisper (`whisper-large-v3-turbo`)** (zero PC load, preserves Gemini quota)
   - [ ] Optional local: **`faster-whisper`** (`base`/`small` int8 CPU)

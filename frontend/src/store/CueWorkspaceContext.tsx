@@ -8,7 +8,7 @@ import {
   removeOfflineCommand,
 } from "@/lib/offlineQueue";
 import { formatINR, formatQty, formatTimeIST, getTodayIST, makeOperationId } from "@/lib/format";
-import { speakReply } from "@/lib/tts";
+import { speakReply, stopSpeaking } from "@/lib/tts";
 import type {
   BaseUnit,
   ChatEntry,
@@ -1375,6 +1375,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     async (rawText: string, opts?: { fromOfflineSync?: boolean; operationId?: string }) => {
       const text = rawText.trim();
       if (!text) return;
+      stopSpeaking();
       const opId = opts?.operationId ?? makeOperationId();
       const nowIso = new Date().toISOString();
       const lower = text.toLowerCase();

@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, Square, Keyboard, ListChecks, ArrowUp, X } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { StatusPill } from "@/components/ui/LedgerPrimitives";
+import { stopSpeaking } from "@/lib/tts";
 
 interface SpeechRecognitionAlternativeLike {
   transcript: string;
@@ -139,6 +140,7 @@ export function LivingAcousticOrb() {
   }, [setVoicePhase, submitCommand]);
 
   const startRecording = useCallback(async () => {
+    stopSpeaking();
     setMicError(null);
     setShowSamples(false);
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
