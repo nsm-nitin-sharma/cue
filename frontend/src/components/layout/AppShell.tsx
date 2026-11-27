@@ -4,23 +4,18 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Mic,
-  Package,
-  ReceiptIndianRupee,
-  Users,
-  Wallet,
-  BarChart3,
+  CalendarDays,
   Wifi,
   WifiOff,
   Volume2,
   VolumeX,
-  CalendarDays,
-  ShieldCheck,
-  Menu,
+  SlidersHorizontal,
   X,
+  ShieldCheck,
+  AlertTriangle,
   Crown,
   LogIn,
-  AlertTriangle,
+  Mic,
 } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { formatINR } from "@/lib/format";
@@ -28,24 +23,19 @@ import { StatusPill, ConfirmDrawer } from "@/components/ui/LedgerPrimitives";
 import { NewEntityPopup } from "@/features/voice/NewEntityPopup";
 import type { LanguageMode } from "@/types/cue";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Voice Desk", icon: Mic },
-  { href: "/inventory", label: "Stock & Aliases", icon: Package },
-  { href: "/sales", label: "Sales Ledger", icon: ReceiptIndianRupee },
-  { href: "/customers", label: "Udhaar Khata", icon: Users },
-  { href: "/expenses", label: "Expenses", icon: Wallet },
-  { href: "/reports", label: "Replay & Reports", icon: BarChart3 },
+const NAV_TABS = [
+  { href: "/", label: "Voice" },
+  { href: "/inventory", label: "Stock" },
+  { href: "/sales", label: "Sales" },
+  { href: "/customers", label: "Khata" },
+  { href: "/expenses", label: "Expenses" },
+  { href: "/reports", label: "Reports" },
 ];
 
-export function AppShell({
-  children,
-  showPulseRail = false,
-}: {
-  children: React.ReactNode;
-  showPulseRail?: boolean;
-}) {
+export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [registerOpen, setRegisterOpen] = useState(false);
 
   const {
     store,
@@ -58,6 +48,7 @@ export function AppShell({
     conversations,
     activeDate,
     setActiveDate,
+    activeConversation,
     offlineQueue,
     todayStats,
     newProductDraft,
@@ -70,328 +61,361 @@ export function AppShell({
   } = useCueWorkspace();
 
   const tierLabel =
-    store.tier === "free" ? "Free Pilot" : store.tier === "growth" ? "Growth" : "Pro";
+    store.tier === "free" ? "Free" : store.tier === "growth" ? "Growth" : "Pro";
 
   return (
-    <div className="min-h-screen flex bg-paper text-ink">
-      {/* Mobile Sidebar Backdrop */}
-      {mobileNavOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-ink/25 lg:hidden"
-          onClick={() => setMobileNavOpen(false)}
-        />
-      )}
+    <div className="min-h-screen flex flex-col bg-paper text-ink relative">
+      {/* Ultra-Minimal Floating Top Bar */}
+      <header className="sticky top-0 z-30 h-16 px-4 sm:px-8 flex items-center justify-between gap-4 bg-paper/85 backdrop-blur-md border-b border-rule/70">
+        {/* Left: Wordmark + 30-Day Calendar Selector */}
+        <div className="flex items-center gap-3 min-w-0">
+          <Link href="/" className="flex items-center gap-2 shrink-0 group">
+            <span className="w-2.5 h-2.5 rounded-full bg-vermilion group-hover:scale-125 transition-transform" />
+            <span className="text-[15px] font-semibold tracking-tight text-ink">Cue</span>
+          </Link>
 
-      {/* Left Rail: Store Identity, Navigation & 30-Day Daily Chat Strip */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 w-[268px] bg-paper-elevated border-r border-rule flex flex-col transition-transform duration-200 lg:static lg:translate-x-0 ${
-          mobileNavOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        {/* Brand & Store Header */}
-        <div className="px-5 py-4 border-b border-rule flex items-center justify-between">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-vermilion text-white flex items-center justify-center font-semibold text-sm tracking-tight shrink-0">
-              C
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="font-semibold text-sm tracking-tight text-ink">Cue</span>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-paper-subtle text-ink-secondary border border-rule">
-                  {tierLabel}
-                </span>
-              </div>
-              <p className="text-[11px] text-ink-muted truncate">{store.name}</p>
-            </div>
-          </div>
+          <span className="text-rule-strong hidden sm:inline">/</span>
+
           <button
-            onClick={() => setMobileNavOpen(false)}
-            className="lg:hidden p-1 rounded-lg text-ink-muted hover:text-ink"
-            aria-label="Close menu"
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="hidden sm:inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs text-ink-secondary hover:text-ink bg-paper-elevated border border-rule hover:border-rule-strong transition-colors"
+            title="Open 30-day daily ledger history"
           >
-            <X className="w-4 h-4" />
+            <CalendarDays className="w-3.5 h-3.5 text-vermilion" />
+            <span className="font-medium text-ink">{activeConversation.label}</span>
+            <span className="font-mono text-[11px] text-ink-muted">{activeConversation.date.slice(5)}</span>
           </button>
         </div>
 
-        {/* Navigation Links */}
-        <nav className="px-3 py-3 space-y-0.5 border-b border-rule">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const active = pathname === item.href;
+        {/* Center: Clean Floating Navigation Dock */}
+        <nav className="hidden md:flex items-center p-1 rounded-full bg-paper-elevated border border-rule shadow-sm">
+          {NAV_TABS.map((tab) => {
+            const active = pathname === tab.href;
             return (
               <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setMobileNavOpen(false)}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px] transition-colors ${
+                key={tab.href}
+                href={tab.href}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
                   active
-                    ? "bg-paper-subtle text-ink font-semibold border border-rule"
-                    : "text-ink-secondary hover:bg-paper hover:text-ink"
+                    ? "bg-ink text-paper-elevated shadow-sm"
+                    : "text-ink-secondary hover:text-ink"
                 }`}
               >
-                <Icon className={`w-4 h-4 ${active ? "text-vermilion" : "text-ink-muted"}`} />
-                <span>{item.label}</span>
+                {tab.label}
               </Link>
             );
           })}
         </nav>
 
-        {/* 30-Day Daily Ledger Chat History */}
-        <div className="flex-1 overflow-y-auto px-3 py-3">
-          <div className="px-2 mb-2 flex items-center justify-between">
-            <span className="text-[10px] font-mono uppercase tracking-wider text-ink-muted flex items-center gap-1">
-              <CalendarDays className="w-3 h-3" />
-              Daily Chats (30d Window)
+        {/* Right: Quiet Today Ticker + Register / Controls Drawer Trigger */}
+        <div className="flex items-center gap-2">
+          {(isOffline || offlineQueue.length > 0) && (
+            <button
+              type="button"
+              onClick={() => setRegisterOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-ochre-soft text-ochre border border-ochre/25"
+            >
+              <WifiOff className="w-3 h-3" />
+              <span>{offlineQueue.length} queued</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setRegisterOpen(true)}
+            className="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full text-xs bg-paper-elevated border border-rule hover:border-rule-strong transition-colors shadow-sm"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-sage" />
+            <span className="font-mono tabular-nums font-medium text-ink">
+              {formatINR(todayStats.salesTotal)}
             </span>
-          </div>
-          <div className="space-y-1">
-            {conversations.map((conv) => {
-              const selected = conv.date === activeDate && pathname === "/";
-              return (
-                <Link
-                  key={conv.date}
-                  href="/"
-                  onClick={() => {
-                    setActiveDate(conv.date);
-                    setMobileNavOpen(false);
-                  }}
-                  className={`block px-3 py-2 rounded-xl transition-colors border ${
-                    selected
-                      ? "bg-vermilion-soft/55 border-vermilion/25 text-ink"
-                      : "border-transparent hover:bg-paper text-ink-secondary"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-ink">{conv.label}</span>
-                    <span className="text-[10px] font-mono text-ink-muted">{conv.date.slice(5)}</span>
-                  </div>
-                  <p className="text-[11px] text-ink-muted truncate mt-0.5">{conv.summary}</p>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Subscription Usage & Account Footer */}
-        <div className="p-3 border-t border-rule space-y-2 bg-paper/60">
-          <div className="px-2 py-1.5">
-            <div className="flex items-center justify-between text-[11px] mb-1">
-              <span className="text-ink-secondary">Voice Turns</span>
-              <span className="font-mono tabular-nums text-ink">
-                {store.monthlyVoiceUsed}/{store.monthlyVoiceLimit}
+            {todayStats.lowStockProducts.length > 0 && (
+              <span className="hidden sm:inline text-[11px] text-ochre font-mono">
+                · {todayStats.lowStockProducts.length} low
               </span>
-            </div>
-            <div className="h-1.5 rounded-full bg-paper-wash overflow-hidden">
-              <div
-                className="h-full bg-vermilion rounded-full transition-all"
-                style={{
-                  width: `${Math.min(100, Math.round((store.monthlyVoiceUsed / store.monthlyVoiceLimit) * 100))}%`,
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5">
-            <Link
-              href="/onboarding"
-              className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-medium bg-paper-elevated border border-rule text-ink-secondary hover:text-ink transition-colors"
-            >
-              <Crown className="w-3 h-3 text-ochre" />
-              Plans
-            </Link>
-            <Link
-              href="/login"
-              className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-medium bg-paper-elevated border border-rule text-ink-secondary hover:text-ink transition-colors"
-            >
-              <LogIn className="w-3 h-3" />
-              Account
-            </Link>
-          </div>
+            )}
+            <SlidersHorizontal className="w-3.5 h-3.5 text-ink-muted" />
+          </button>
         </div>
-      </aside>
+      </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Quiet Context Top Bar */}
-        <header className="h-14 px-4 sm:px-6 border-b border-rule bg-paper-elevated/80 backdrop-blur-sm flex items-center justify-between gap-3 sticky top-0 z-30">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              onClick={() => setMobileNavOpen(true)}
-              className="lg:hidden p-1.5 rounded-xl border border-rule text-ink-secondary hover:text-ink"
-              aria-label="Open menu"
-            >
-              <Menu className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xs font-mono text-ink-muted hidden sm:inline">IST · Asia/Kolkata</span>
-              <span className="text-rule-strong hidden sm:inline">|</span>
-              <span className="inline-flex items-center gap-1 text-[11px] text-sage font-medium">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">AI Parser Only · Append-Only Ledger</span>
-                <span className="md:hidden">Protected Ledger</span>
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* Language Switcher */}
-            <div className="hidden sm:flex items-center bg-paper-subtle p-0.5 rounded-xl border border-rule">
-              {(
-                [
-                  { code: "hinglish", label: "Hinglish" },
-                  { code: "hi", label: "हिन्दी" },
-                  { code: "en", label: "English" },
-                ] as { code: LanguageMode; label: string }[]
-              ).map((lang) => (
-                <button
-                  key={lang.code}
-                  type="button"
-                  onClick={() => setLanguage(lang.code)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
-                    language === lang.code
-                      ? "bg-paper-elevated text-ink shadow-sm"
-                      : "text-ink-muted hover:text-ink"
-                  }`}
-                >
-                  {lang.label}
-                </button>
-              ))}
-            </div>
-
-            {/* TTS Voice Toggle */}
-            <button
-              type="button"
-              onClick={() => setTtsEnabled(!ttsEnabled)}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-medium border transition-colors ${
-                ttsEnabled
-                  ? "bg-paper-elevated border-rule text-ink"
-                  : "bg-paper-subtle border-rule text-ink-muted"
+      {/* Mobile Compact Route Strip */}
+      <div className="md:hidden flex items-center gap-1 px-4 py-2 overflow-x-auto no-scrollbar border-b border-rule bg-paper-elevated/60">
+        {NAV_TABS.map((tab) => {
+          const active = pathname === tab.href;
+          return (
+            <Link
+              key={tab.href}
+              href={tab.href}
+              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${
+                active ? "bg-ink text-paper-elevated" : "text-ink-secondary"
               }`}
-              title="Toggle spoken responses"
             >
-              {ttsEnabled ? <Volume2 className="w-3.5 h-3.5 text-vermilion" /> : <VolumeX className="w-3.5 h-3.5" />}
-              <span className="hidden md:inline">{ttsEnabled ? "Voice On" : "Muted"}</span>
-            </button>
+              {tab.label}
+            </Link>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => setHistoryOpen(true)}
+          className="shrink-0 ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs text-vermilion bg-vermilion-soft"
+        >
+          <CalendarDays className="w-3 h-3" />
+          {activeConversation.label}
+        </button>
+      </div>
 
-            {/* Offline Queue Simulator Toggle */}
-            <button
-              type="button"
-              onClick={() => setIsOffline(!isOffline)}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-medium border transition-colors ${
-                isOffline
-                  ? "bg-ochre-soft border-ochre/30 text-ochre"
-                  : "bg-sage-soft border-sage/20 text-sage"
-              }`}
-              title="Toggle offline mode to test IndexedDB FIFO queueing"
-            >
-              {isOffline ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
-              <span>{isOffline ? `Offline (${offlineQueue.length})` : "Online"}</span>
-            </button>
-          </div>
-        </header>
+      {/* Main Open Stage */}
+      <main className="flex-1 flex flex-col min-h-0">{children}</main>
 
-        <div className="flex-1 flex min-h-0">
-          {/* Center Workspace */}
-          <main className="flex-1 flex flex-col min-w-0">{children}</main>
+      {/* Persistent Mini Voice Orb on Secondary Ledger Screens */}
+      {pathname !== "/" && (
+        <Link
+          href="/"
+          className="fixed bottom-6 right-6 z-30 inline-flex items-center gap-2.5 pl-3.5 pr-4 py-3 rounded-full bg-vermilion hover:bg-vermilion-hover text-white shadow-orb transition-transform hover:scale-[1.03]"
+          title="Return to Voice Desk"
+        >
+          <Mic className="w-4 h-4" />
+          <span className="text-xs font-medium tracking-wide">Speak to Cue</span>
+        </Link>
+      )}
 
-          {/* Right Live Register Pulse Strip (Desktop Voice Desk) */}
-          {showPulseRail && (
-            <aside className="hidden xl:flex w-[288px] border-l border-rule bg-paper-elevated/60 flex-col p-5 space-y-6">
+      {/* Slide-Over Drawer 1: 30-Day Daily Chat History */}
+      {historyOpen && (
+        <div className="fixed inset-0 z-50 flex justify-start bg-ink/20 backdrop-blur-[2px]">
+          <div className="w-full max-w-sm bg-paper-elevated h-full border-r border-rule shadow-dock flex flex-col animate-slip-in">
+            <div className="px-6 py-5 border-b border-rule flex items-center justify-between">
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-ink-muted">
-                    Today&apos;s Register
-                  </span>
-                  <StatusPill tone="sage" dot>
-                    Live
-                  </StatusPill>
-                </div>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-vermilion">
+                  Rolling 30-Day Memory
+                </p>
+                <h2 className="text-base font-semibold text-ink mt-0.5">Daily Ledger Chats</h2>
+              </div>
+              <button
+                onClick={() => setHistoryOpen(false)}
+                className="p-1.5 rounded-full text-ink-muted hover:text-ink hover:bg-paper-subtle"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-                <div className="p-4 rounded-2xl bg-paper-elevated border border-rule space-y-3">
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {conversations.map((conv) => {
+                const selected = conv.date === activeDate;
+                return (
+                  <Link
+                    key={conv.date}
+                    href="/"
+                    onClick={() => {
+                      setActiveDate(conv.date);
+                      setHistoryOpen(false);
+                    }}
+                    className={`block p-3.5 rounded-2xl border transition-colors ${
+                      selected
+                        ? "bg-vermilion-soft/50 border-vermilion/30"
+                        : "bg-paper border-rule hover:border-rule-strong"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-ink">{conv.label}</span>
+                      <span className="text-[11px] font-mono text-ink-muted">{conv.date}</span>
+                    </div>
+                    <p className="text-xs text-ink-secondary mt-1 line-clamp-2">{conv.summary}</p>
+                  </Link>
+                );
+              })}
+            </div>
+
+            <div className="p-4 border-t border-rule bg-paper text-[11px] text-ink-muted leading-relaxed">
+              One continuous chat per business day. Older than 30 days? Permanent records stay safely in{" "}
+              <Link href="/reports" onClick={() => setHistoryOpen(false)} className="text-ink underline">
+                Reports
+              </Link>
+              .
+            </div>
+          </div>
+          <div className="flex-1" onClick={() => setHistoryOpen(false)} />
+        </div>
+      )}
+
+      {/* Slide-Over Drawer 2: Today's Register, Controls, Account & Guardrails */}
+      {registerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-ink/20 backdrop-blur-[2px]">
+          <div className="flex-1" onClick={() => setRegisterOpen(false)} />
+          <div className="w-full max-w-sm bg-paper-elevated h-full border-l border-rule shadow-dock flex flex-col animate-slip-in">
+            <div className="px-6 py-5 border-b border-rule flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-sage">
+                  {store.name} · {tierLabel}
+                </p>
+                <h2 className="text-base font-semibold text-ink mt-0.5">Today&apos;s Register &amp; Controls</h2>
+              </div>
+              <button
+                onClick={() => setRegisterOpen(false)}
+                className="p-1.5 rounded-full text-ink-muted hover:text-ink hover:bg-paper-subtle"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Today Snapshot */}
+              <div className="p-4 rounded-2xl bg-paper border border-rule space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-ink-secondary">Today&apos;s Sales</span>
+                  <StatusPill tone="sage" dot>IST Live</StatusPill>
+                </div>
+                <p className="text-3xl font-mono font-semibold tabular-nums text-ink">
+                  {formatINR(todayStats.salesTotal)}
+                </p>
+                <div className="grid grid-cols-3 gap-2 pt-3 border-t border-rule text-xs">
                   <div>
-                    <p className="text-[11px] text-ink-muted">Today&apos;s Total Sales</p>
-                    <p className="text-2xl font-mono font-semibold tabular-nums text-ink mt-0.5">
-                      {formatINR(todayStats.salesTotal)}
-                    </p>
+                    <p className="text-[10px] text-ink-muted">Cash</p>
+                    <p className="font-mono font-medium text-sage">{formatINR(todayStats.cashTotal)}</p>
                   </div>
-                  <div className="pt-2.5 border-t border-rule grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <p className="text-[11px] text-ink-muted">Cash</p>
-                      <p className="font-mono font-medium tabular-nums text-sage">
-                        {formatINR(todayStats.cashTotal)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-[11px] text-ink-muted">Udhaar</p>
-                      <p className="font-mono font-medium tabular-nums text-ochre">
-                        {formatINR(todayStats.udhaarTotal)}
-                      </p>
-                    </div>
+                  <div>
+                    <p className="text-[10px] text-ink-muted">Udhaar</p>
+                    <p className="font-mono font-medium text-ochre">{formatINR(todayStats.udhaarTotal)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-ink-muted">Khata Due</p>
+                    <p className="font-mono font-medium text-ink">{formatINR(todayStats.outstandingTotal)}</p>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="p-3 rounded-xl bg-paper-elevated border border-rule">
-                  <p className="text-[11px] text-ink-muted">Movements</p>
-                  <p className="text-lg font-mono font-semibold tabular-nums text-ink mt-0.5">
-                    {todayStats.movementsCount}
-                  </p>
+              {/* Voice & Connectivity Controls */}
+              <div className="space-y-3">
+                <p className="text-[11px] font-mono uppercase tracking-wider text-ink-muted">
+                  Voice &amp; Sync Preferences
+                </p>
+
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-paper border border-rule">
+                  <span className="text-xs font-medium text-ink">Language</span>
+                  <div className="flex items-center gap-1">
+                    {(
+                      [
+                        { code: "hinglish", label: "Hinglish" },
+                        { code: "hi", label: "हिन्दी" },
+                        { code: "en", label: "English" },
+                      ] as { code: LanguageMode; label: string }[]
+                    ).map((l) => (
+                      <button
+                        key={l.code}
+                        type="button"
+                        onClick={() => setLanguage(l.code)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-medium ${
+                          language === l.code ? "bg-ink text-paper-elevated" : "text-ink-muted hover:text-ink"
+                        }`}
+                      >
+                        {l.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="p-3 rounded-xl bg-paper-elevated border border-rule">
-                  <p className="text-[11px] text-ink-muted">Pending Khata</p>
-                  <p className="text-lg font-mono font-semibold tabular-nums text-ochre mt-0.5">
-                    {formatINR(todayStats.outstandingTotal)}
-                  </p>
-                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setTtsEnabled(!ttsEnabled)}
+                  className="w-full flex items-center justify-between p-3 rounded-2xl bg-paper border border-rule text-xs"
+                >
+                  <span className="font-medium text-ink">Spoken Voice Replies (TTS)</span>
+                  <span className="inline-flex items-center gap-1.5 text-ink-secondary">
+                    {ttsEnabled ? <Volume2 className="w-3.5 h-3.5 text-vermilion" /> : <VolumeX className="w-3.5 h-3.5" />}
+                    {ttsEnabled ? "On" : "Muted"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsOffline(!isOffline)}
+                  className="w-full flex items-center justify-between p-3 rounded-2xl bg-paper border border-rule text-xs"
+                >
+                  <span className="font-medium text-ink">Connectivity Simulator</span>
+                  <span className={`inline-flex items-center gap-1.5 font-medium ${isOffline ? "text-ochre" : "text-sage"}`}>
+                    {isOffline ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
+                    {isOffline ? `Offline (${offlineQueue.length} queued)` : "Online"}
+                  </span>
+                </button>
               </div>
 
-              {/* Low Stock Watchlist */}
+              {/* Low Stock Watch */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] font-mono uppercase tracking-wider text-ink-muted flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3 text-ochre" />
                     Low Stock Watch
                   </span>
-                  <Link href="/inventory" className="text-[11px] text-vermilion hover:underline">
-                    View all
+                  <Link
+                    href="/inventory"
+                    onClick={() => setRegisterOpen(false)}
+                    className="text-xs text-vermilion hover:underline"
+                  >
+                    Manage
                   </Link>
                 </div>
                 <div className="space-y-1.5">
                   {todayStats.lowStockProducts.map((p) => (
                     <div
                       key={p.id}
-                      className="px-3 py-2 rounded-xl bg-paper-elevated border border-rule flex items-center justify-between text-xs"
+                      className="px-3 py-2 rounded-xl bg-paper border border-rule flex items-center justify-between text-xs"
                     >
-                      <span className="text-ink truncate pr-2">{p.name}</span>
-                      <span className="font-mono font-medium tabular-nums text-crimson shrink-0">
+                      <span className="text-ink">{p.name}</span>
+                      <span className="font-mono text-crimson font-medium">
                         {p.stock} {p.baseUnit}
                       </span>
                     </div>
                   ))}
-                  {todayStats.lowStockProducts.length === 0 && (
-                    <p className="text-xs text-ink-muted">All stock levels healthy.</p>
-                  )}
                 </div>
               </div>
 
-              {/* Hardcore Security Callout */}
-              <div className="mt-auto p-3.5 rounded-xl bg-paper border border-rule text-[11px] text-ink-secondary space-y-1">
-                <p className="font-medium text-ink flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-sage" />
-                  Enterprise Guardrails
-                </p>
-                <p className="leading-relaxed text-ink-muted">
-                  Negative stock blocked · ≥ ₹5,000 requires confirmation · 30-day rolling memory window.
+              {/* Subscription Usage & Guardrails */}
+              <div className="p-4 rounded-2xl bg-paper border border-rule space-y-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-ink-secondary">Monthly Voice Quota</span>
+                  <span className="font-mono text-ink">
+                    {store.monthlyVoiceUsed}/{store.monthlyVoiceLimit}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-paper-wash overflow-hidden">
+                  <div
+                    className="h-full bg-vermilion rounded-full"
+                    style={{
+                      width: `${Math.min(100, Math.round((store.monthlyVoiceUsed / store.monthlyVoiceLimit) * 100))}%`,
+                    }}
+                  />
+                </div>
+                <p className="text-[11px] text-ink-muted flex items-center gap-1.5 pt-1">
+                  <ShieldCheck className="w-3.5 h-3.5 text-sage shrink-0" />
+                  AI acts strictly as parser · ≥ ₹5,000 confirmed
                 </p>
               </div>
-            </aside>
-          )}
-        </div>
-      </div>
+            </div>
 
-      {/* Global Interactive Pop-Ups (Confirmable via Voice OR Tap) */}
+            <div className="p-4 border-t border-rule grid grid-cols-2 gap-2">
+              <Link
+                href="/onboarding"
+                onClick={() => setRegisterOpen(false)}
+                className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-medium bg-paper border border-rule hover:border-rule-strong"
+              >
+                <Crown className="w-3.5 h-3.5 text-ochre" />
+                Plans ({tierLabel})
+              </Link>
+              <Link
+                href="/login"
+                onClick={() => setRegisterOpen(false)}
+                className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-medium bg-ink text-paper-elevated"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                Account
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive Modals (Voice OR Tap Confirmable) */}
       <NewEntityPopup
         draft={newProductDraft}
         onChange={setNewProductDraft}

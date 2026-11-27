@@ -46,7 +46,7 @@ export function ReceiptSlipCard({
 
   return (
     <div
-      className="receipt-slip rounded-2xl p-4 pl-5 mt-2.5 max-w-xl animate-slip-in"
+      className="receipt-slip rounded-2xl p-4 pl-5 mt-3 max-w-2xl animate-slip-in"
       style={{ "--slip-accent": accentHex } as React.CSSProperties}
     >
       <div className="flex items-start justify-between gap-3">

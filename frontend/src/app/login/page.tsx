@@ -70,7 +70,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-paper paper-grain flex flex-col justify-between p-6 sm:p-10">
+    <div className="min-h-screen bg-paper flex flex-col justify-between p-6 sm:p-10">
       <header className="max-w-5xl w-full mx-auto flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-vermilion text-white flex items-center justify-center font-semibold text-sm">

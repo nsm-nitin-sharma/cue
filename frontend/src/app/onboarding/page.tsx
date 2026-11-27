@@ -75,7 +75,7 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-paper paper-grain py-8 px-4 sm:px-8">
+    <div className="min-h-screen bg-paper py-8 px-4 sm:px-8">
       <div className="max-w-5xl mx-auto space-y-8">
         <header className="flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5">

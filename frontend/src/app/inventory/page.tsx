@@ -53,8 +53,8 @@ export default function InventoryPage() {
 
   return (
     <AppShell>
-      <div className="flex-1 overflow-y-auto p-6 sm:p-8 paper-grain">
-        <div className="max-w-6xl mx-auto space-y-6">
+      <div className="flex-1 overflow-y-auto px-5 py-8 sm:px-8 sm:py-10">
+        <div className="max-w-5xl mx-auto space-y-7">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-[11px] font-mono uppercase tracking-wider text-vermilion">
