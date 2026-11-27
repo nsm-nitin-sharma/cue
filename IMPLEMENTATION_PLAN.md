@@ -137,7 +137,9 @@ Instead of generic SaaS templates, purple gradients, or cluttered dashboard grid
 ```text
 cue/
 ├── IMPLEMENTATION_PLAN.md
+├── FEATURES.md                            # Master living feature checklist (Done vs Pending)
 ├── README.md
+├── .gitignore                             # Strict secret, .env, key & media exclusion
 ├── backend/
 │   ├── pyproject.toml
 │   ├── requirements.txt
@@ -148,8 +150,9 @@ cue/
 │   │   │   ├── deps.py                    # Verified JWT user + business_id resolution
 │   │   │   └── v1/
 │   │   │       ├── router.py
-│   │   │       ├── voice.py               # /voice/turn, /voice/confirm, /voice/sync-batch
+│   │   │       ├── voice.py               # /voice/turn, /voice/confirm, /voice/clarify, /voice/sync-batch
 │   │   │       ├── conversations.py       # 30-day day-grouped chat endpoints
+│   │   │       ├── subscriptions.py       # Free / Growth / Pro plan catalog & store onboarding
 │   │   │       ├── inventory.py           # Products, aliases, unit conversions, movements
 │   │   │       ├── sales.py               # Sales, corrections, returns
 │   │   │       ├── customers.py           # Udhaar ledger & repayments
@@ -159,7 +162,8 @@ cue/
 │   │   ├── core/
 │   │   │   ├── config.py                  # Strict Pydantic Settings
 │   │   │   ├── security.py                # Supabase JWT verification, rate limiter, payload hashing
-│   │   │   ├── policy.py                  # SecurityPolicyEngine (zero destructive intents, risk tiers, confirmation tokens)
+│   │   │   ├── policy.py                  # SecurityPolicyEngine (zero destructive intents, ₹5,000 threshold, confirmation tokens)
+│   │   │   ├── entitlements.py            # Subscription tier quota & feature checks
 │   │   │   ├── time_utils.py              # Business timezone (Asia/Kolkata) & relative date parser + >30d check
 │   │   │   ├── logging.py                 # Structured PII-safe logging
 │   │   │   └── exceptions.py              # Typed domain & security error codes
@@ -169,7 +173,8 @@ cue/
 │   │   │   │   ├── 001_schema.sql
 │   │   │   │   ├── 002_rls_and_security.sql
 │   │   │   │   ├── 003_atomic_rpcs.sql
-│   │   │   │   └── 004_seed_kirana.sql
+│   │   │   │   ├── 004_seed_kirana.sql
+│   │   │   │   └── 005_subscriptions_seed.sql
 │   │   │   └── repositories/              # Pure parameterized data access per entity
 │   │   ├── domain/
 │   │   │   ├── schemas/                   # Strict Pydantic v2 IntentProposal, Replay, API DTOs (extra='forbid')
@@ -206,7 +211,8 @@ cue/
         ├── app/
         │   ├── layout.tsx                 # Fonts, Warm Ledger theme, Auth & Sync providers
         │   ├── page.tsx                   # Voice Desk (Conversational Home)
-        │   ├── login/page.tsx             # Supabase Auth (Email/OTP)
+        │   ├── login/page.tsx             # Supabase Auth (Email/Password + Google OAuth)
+        │   ├── onboarding/page.tsx        # Subscription tier selection (Free/Growth/Pro) + Store setup
         │   ├── inventory/page.tsx
         │   ├── sales/page.tsx
         │   ├── customers/page.tsx
@@ -216,7 +222,7 @@ cue/
         │   ├── layout/                    # AppShell, DayChatSidebar, TodayPulsePanel
         │   └── ui/                        # LedgerTable, Amount, StatusPill, ConfirmDrawer
         ├── features/
-        │   ├── voice/                     # LivingMicOrb, AudioWaveform, TranscriptStream, ReceiptSlipCard, ClarificationChips
+        │   ├── voice/                     # LivingMicOrb, AudioWaveform, TranscriptStream, ReceiptSlipCard, ClarificationChips, NewEntityPopup
         │   ├── offline/                   # OfflineSyncBanner, SyncEngine
         │   └── ledger/                    # Inventory, Sales, Customers, Expenses, Replay components
         └── lib/
@@ -228,14 +234,17 @@ cue/
 
 ---
 
-## 7. Phased Build & Verification Plan
+## 7. GitHub Workflow & Phased Build Checklist
+
+- **Milestone Commits:** Every major completed milestone is verified (tests/build + secret-scan via `git status` & `git diff --cached` ensuring zero `.env` or secret exposure), updated in `FEATURES.md`, and committed + pushed to GitHub.
+- **Step-by-Step Secret Onboarding:** Credentials are collected one-by-one (1. GitHub remote → 2. Supabase Free Tier → 3. Google Gemini Free Tier → 4. Groq Free Whisper) and placed strictly in git-ignored `.env` files.
 
 1. **Phase 1 — Foundation & Database (Hardcore Security First):**
-   - Initialize `backend/` & `frontend/` workspaces, `.env.example` files, and SQL migrations (`001_schema.sql` → `004_seed_kirana.sql`) with RLS, `SELECT ... FOR UPDATE` atomic RPCs, and kirana seed data.
+   - Initialize `backend/` & `frontend/` workspaces, `.env.example` files, and SQL migrations (`001_schema.sql` → `005_subscriptions_seed.sql`) with RLS, `SELECT ... FOR UPDATE` atomic RPCs, subscription tiers, and kirana seed data.
 2. **Phase 2 — Secure Backend Pipeline & 30-Day Memory Engine:**
-   - Implement `SecurityPolicyEngine`, `STTProvider` + `LLMProvider` (strictly untrusted parser mode), `memory_30d` (day-grouped chats + 30-day retrieval + `>30 days` guard), `entity_resolver`, `transaction_engine`, `replay_engine`, and `analytics_foundation`.
-   - Write automated unit + security test suite (verifying destructive-intent blocking, prompt-injection resilience, idempotency, correction audit trails, and 30-day window boundaries).
+   - Implement `SecurityPolicyEngine`, `STTProvider` (`groq_whisper` default + adapters) + `LLMProvider` (`gemini` primary + `ollama` optional), `memory_30d`, `entity_resolver` (`"Do you mean?"` + verified alias learning + new-entity pop-up payload), `transaction_engine`, `replay_engine`, and `analytics_foundation`.
+   - Write automated unit + security test suite (destructive-intent blocking, prompt-injection resilience, idempotency, negative-stock block, ₹5,000 threshold, 30-day window boundaries).
 3. **Phase 3 — Bespoke Voice-First Frontend:**
-   - Implement the "Warm Ledger & Studio Voice" UI, `LivingMicOrb` (`MediaRecorder` + Web Audio waveform), `SpeechSynthesis` replies, 30-day daily chat rail, tactile `ReceiptSlipCard`s, `IndexedDB` FIFO offline queue, and all 5 ledger/report sections.
+   - Implement the "Warm Ledger & Studio Voice" UI, Supabase Email/Password + Google OAuth login, subscription tier onboarding, `LivingMicOrb` (`MediaRecorder` + Web Audio waveform), `SpeechSynthesis` replies, 30-day daily chat rail, tactile `ReceiptSlipCard`s, voice/tap-confirmable `NewEntityPopup`, `IndexedDB` FIFO offline queue, and all ledger/report sections.
 4. **Phase 4 — End-to-End Live Verification:**
-   - Run backend security/unit tests, Next.js TypeScript/production build check, and live end-to-end voice workflows against Supabase + Gemini/STT once `.env` keys are connected.
+   - Run backend security/unit tests, Next.js TypeScript/production build check, and live end-to-end voice workflows against Supabase + Gemini + Groq Whisper.
