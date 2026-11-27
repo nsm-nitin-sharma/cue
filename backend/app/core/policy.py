@@ -21,6 +21,7 @@ ALLOWED_INTENTS = frozenset(
         "update_product_settings",
         "archive_product",
         "correct_last_sale",
+        "correct_last_operation",
         "undo_last_operation",
         "business_day_replay",
         "query_business",

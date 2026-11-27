@@ -14,9 +14,56 @@ _SYNONYM_HINTS: dict[str, str] = {
 }
 
 
+_PACKAGING_STOPWORDS = frozenset(
+    {
+        "packet",
+        "packets",
+        "pkt",
+        "pkts",
+        "bottle",
+        "bottles",
+        "piece",
+        "pieces",
+        "pcs",
+        "pc",
+        "kg",
+        "kilo",
+        "gram",
+        "grams",
+        "gm",
+        "g",
+        "ml",
+        "litre",
+        "liter",
+        "litres",
+        "liters",
+        "l",
+        "box",
+        "boxes",
+        "pack",
+        "pouch",
+        "jar",
+        "unit",
+        "units",
+        "per",
+        "new",
+        "product",
+    }
+)
+
+
 def normalize_text(raw: str) -> str:
     cleaned = re.sub(r"[^a-z0-9\s\-]", " ", raw.lower())
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _strip_packaging(norm: str) -> str:
+    tokens = [
+        tok
+        for tok in norm.split()
+        if tok not in _PACKAGING_STOPWORDS and not re.fullmatch(r"\d+(?:\.\d+)?(?:g|gm|kg|ml|l)?", tok)
+    ]
+    return " ".join(tokens).strip() or norm
 
 
 @dataclass
@@ -69,11 +116,13 @@ def resolve_product(
                 return ProductResolution(status="exact", product=target, spoken_term=query)
 
     # 3. Token / variant containment (e.g., "pepsi" matching multiple variants)
-    q_tokens = set(norm_q.split())
+    core_q = _strip_packaging(norm_q)
+    q_tokens = {tok for tok in core_q.split() if len(tok) >= 4}
     variant_matches: list[dict[str, Any]] = []
     for p in products:
         p_norm = normalize_text(p["name"])
-        if norm_q in p_norm or any(tok in p_norm.split() for tok in q_tokens if len(tok) >= 4):
+        core_p = _strip_packaging(p_norm)
+        if core_q in core_p or any(tok in core_p.split() for tok in q_tokens):
             variant_matches.append(p)
 
     if len(variant_matches) > 1:
@@ -84,20 +133,21 @@ def resolve_product(
         )
 
     # 4. Single fuzzy / phonetic match -> ALWAYS ask "Do you mean ...?" instead of guessing
-    hinted_q = " ".join(_SYNONYM_HINTS.get(tok, tok) for tok in norm_q.split())
+    hinted_q = " ".join(_SYNONYM_HINTS.get(tok, tok) for tok in core_q.split())
     scored: list[tuple[float, dict[str, Any]]] = []
     for p in products:
-        p_norm = normalize_text(p["name"])
-        s1 = fuzz.WRatio(norm_q, p_norm)
-        s2 = fuzz.WRatio(hinted_q, p_norm)
+        core_p = _strip_packaging(normalize_text(p["name"]))
+        s1 = fuzz.WRatio(core_q, core_p)
+        s2 = fuzz.WRatio(hinted_q, core_p)
         best = max(s1, s2)
-        if best >= 68:
+        threshold = 68 if hinted_q != core_q else 74
+        if best >= threshold:
             scored.append((best, p))
 
     for al in aliases:
-        al_norm = normalize_text(al["alias_text"])
-        s = max(fuzz.WRatio(norm_q, al_norm), fuzz.WRatio(hinted_q, al_norm))
-        if s >= 76:
+        core_al = _strip_packaging(normalize_text(al["alias_text"]))
+        s = max(fuzz.WRatio(core_q, core_al), fuzz.WRatio(hinted_q, core_al))
+        if s >= 78:
             target = prod_by_id.get(str(al["product_id"]))
             if target and not any(str(x[1]["id"]) == str(target["id"]) for x in scored):
                 scored.append((s, target))

@@ -129,7 +129,7 @@ export default function ExpensesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-rule text-sm">
-                {expenses.map((ex) => (
+                {expenses.filter((ex) => ex.status === "active").map((ex) => (
                   <tr key={ex.id} className="hover:bg-paper/60 transition-colors">
                     <td className="py-3.5 px-4 font-mono text-xs text-ink-secondary">
                       {ex.transactionDate}

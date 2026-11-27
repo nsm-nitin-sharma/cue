@@ -164,3 +164,17 @@ def test_expenses_and_stock_query_parsing():
     assert stk_prop.operations[0].intent == "query_business"
     assert stk_prop.operations[0].query_topic == "stock_check"
     assert stk_prop.operations[0].product_query == "coca cola"
+
+    # Packaging words like "packet" / "gram" must NOT falsely match Maggi Masala 70g
+    surf_res = resolve_product(
+        "surf excel 100 gram packet",
+        PRODUCTS,
+        [{"product_id": "p4", "alias_text": "maggi packet", "is_verified": True}],
+    )
+    assert surf_res.status == "not_found"
+
+    # Payment method correction ("cash nahi, UBI se kia tha") must route to correction, not new expense
+    corr_prop = deterministic_fallback_parse("cash nahi, UBI se kia tha.", "hinglish")
+    assert len(corr_prop.operations) == 1
+    assert corr_prop.operations[0].intent == "correct_last_operation"
+    assert corr_prop.operations[0].payment_method == "upi"

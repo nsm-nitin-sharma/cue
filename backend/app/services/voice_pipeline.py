@@ -715,6 +715,7 @@ class VoicePipelineService:
             context_state["last_product_id"] = str(product["id"])
             context_state["last_product_name"] = product["name"]
             context_state["last_sale_id"] = str(rpc["sale_id"])
+            context_state["last_operation_kind"] = "record_sale"
             context_state["last_operation_id"] = operation_id
             reply = f"{qty:g} {product['name']} ki sale (₹{total:,.0f}) save ho gayi."
             slip = {
@@ -771,7 +772,7 @@ class VoicePipelineService:
             cat = draft.get("expense_category") or "Shop Expense"
             desc = draft.get("description") or cat
             method = draft.get("payment_method") or "cash"
-            self.tx.record_expense(
+            exp = self.tx.record_expense(
                 business_id=business_id,
                 user_id=user_id,
                 category=cat,
@@ -781,6 +782,9 @@ class VoicePipelineService:
                 transaction_date=txn_date,
                 operation_id=operation_id,
             )
+            context_state["last_expense_id"] = str(exp["id"])
+            context_state["last_operation_kind"] = "record_expense"
+            context_state["last_operation_id"] = operation_id
             reply = f"₹{amt:,.0f} ka {cat} expense ({method.upper()}) save ho gaya."
             slip = {
                 "id": f"slip-{operation_id}",
@@ -906,8 +910,47 @@ class VoicePipelineService:
                 )
                 continue
 
-            if op.intent == "correct_last_sale":
+            if op.intent in {"correct_last_sale", "correct_last_operation"}:
+                last_kind = context_state.get("last_operation_kind")
+                exp_id = context_state.get("last_expense_id")
                 sale_id = context_state.get("last_sale_id")
+
+                # Expense correction (e.g., "cash nahi, UPI se kiya tha" or "1000 nahi 500 tha")
+                if last_kind == "record_expense" and exp_id and (
+                    op.payment_method is not None or op.total_amount is not None or op.description is not None
+                ):
+                    corr_exp = self.tx.correct_last_expense(
+                        business_id=business_id,
+                        user_id=user_id,
+                        expense_id=str(exp_id),
+                        operation_id=sub_op_id,
+                        transaction_date=today_str,
+                        new_amount=op.total_amount,
+                        new_payment_method=op.payment_method,
+                        new_description=op.description,
+                    )
+                    context_state["last_expense_id"] = str(corr_exp["new_expense_id"])
+                    replies.append(
+                        f"{corr_exp['category']} expense update ho gaya: ₹{corr_exp['new_amount']:,.0f} ({corr_exp['old_method'].upper()} → {corr_exp['new_method'].upper()})."
+                    )
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "correction",
+                            "title": f"Corrected Expense · {corr_exp['category']}",
+                            "subtitle": "Previous entry marked corrected (Audit Trail)",
+                            "transactionDate": today_str,
+                            "amountINR": corr_exp["new_amount"],
+                            "lines": [
+                                {"label": "Method", "value": f"{corr_exp['old_method'].upper()} → {corr_exp['new_method'].upper()}", "tone": "sage"},
+                                {"label": "Amount", "value": f"₹{corr_exp['new_amount']:,.0f}", "tone": "neutral"},
+                            ],
+                            "status": "corrected",
+                        }
+                    )
+                    continue
+
                 new_qty = op.quantity if op.quantity is not None else extract_post_negation_number(raw_transcript)
                 if sale_id and new_qty is not None:
                     corr = self.tx.correct_sale_quantity(
@@ -938,6 +981,52 @@ class VoicePipelineService:
                         }
                     )
                     continue
+
+                return VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="needs_clarification",
+                    transcript=raw_transcript,
+                    reply="Kaunse pichle transaction ko correct karna hai? Kripya item ya amount saaf batayein.",
+                    language=language,  # type: ignore[arg-type]
+                )
+
+            if op.intent == "create_product":
+                if not op.product_query:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply="Naye product ka naam, quantity aur price batayein.",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                pres_new = resolve_product(op.product_query, products, aliases)
+                if pres_new.status == "exact" and pres_new.product:
+                    replies.append(f"{pres_new.product['name']} pehle se inventory mein maujood hai.")
+                    continue
+                unit_val = op.unit if op.unit in {"piece", "packet", "kg", "litre", "box"} else "packet"
+                item_name = op.product_query.title()
+                msg = f"Naya product '{item_name}' add karne ke liye details confirm karein:"
+                popup = {
+                    "name": item_name,
+                    "category": "General",
+                    "baseUnit": unit_val,
+                    "quantity": op.quantity or 1,
+                    "costPrice": str(op.cost_price or op.unit_price or 0),
+                    "sellingPrice": str(op.unit_price or 0),
+                    "lowStockThreshold": "5",
+                    "actionKind": "receive",
+                }
+                res = VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="new_product_popup",
+                    transcript=raw_transcript,
+                    reply=msg,
+                    language=language,  # type: ignore[arg-type]
+                    receipts=receipts,
+                    new_product_draft=popup,
+                )
+                self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, raw_transcript, language, stt_provider, stt_confidence, op.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
+                return res
 
             # Resolve Product (for stock & sale intents)
             if op.intent in {"inventory_receive", "inventory_damage", "inventory_expiry", "record_sale"}:
@@ -1031,10 +1120,11 @@ class VoicePipelineService:
                         # Brand-new unlisted product -> Voice prompt + interactive screen pop-up!
                         item_name = (op.product_query or "New Product").title()
                         msg = f"{item_name} inventory mein nahi mila — kya naya product add karun?"
+                        unit_val = op.unit if op.unit in {"piece", "packet", "kg", "litre", "box"} else "piece"
                         popup = {
                             "name": item_name,
                             "category": "General",
-                            "baseUnit": "piece",
+                            "baseUnit": unit_val,
                             "quantity": op.quantity or 1,
                             "costPrice": str(op.unit_price or 0),
                             "sellingPrice": str(op.unit_price or 0),

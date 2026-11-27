@@ -122,7 +122,7 @@ class QueryEngine:
                 .select("category, description, amount, payment_method, status")
                 .eq("business_id", business_id)
                 .eq("transaction_date", today_str)
-                .neq("status", "voided")
+                .eq("status", "active")
                 .execute()
             )
             exps = exp_res.data or []
@@ -160,7 +160,7 @@ class QueryEngine:
                 .select("amount, status")
                 .eq("business_id", business_id)
                 .eq("transaction_date", today_str)
-                .neq("status", "voided")
+                .eq("status", "active")
                 .execute()
             )
             s_rows = sales_res.data or []

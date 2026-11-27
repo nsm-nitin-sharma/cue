@@ -306,6 +306,68 @@ class TransactionEngine:
         )
         return res.data[0]
 
+    def correct_last_expense(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        expense_id: str,
+        operation_id: str,
+        transaction_date: str,
+        new_amount: float | None = None,
+        new_payment_method: str | None = None,
+        new_description: str | None = None,
+    ) -> dict[str, Any]:
+        old_rows = (
+            self.db.table("expenses")
+            .select("*")
+            .eq("id", expense_id)
+            .eq("business_id", business_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not old_rows:
+            raise PolicyBlockedError("Previous expense not found to correct.")
+        old = old_rows[0]
+        final_amount = float(new_amount) if new_amount is not None else float(old["amount"])
+        final_method = new_payment_method or str(old["payment_method"])
+        final_desc = new_description or str(old["description"])
+
+        self.db.table("expenses").update({"status": "corrected"}).eq("id", expense_id).eq(
+            "business_id", business_id
+        ).execute()
+
+        inserted = (
+            self.db.table("expenses")
+            .insert(
+                {
+                    "business_id": business_id,
+                    "category": old["category"],
+                    "description": final_desc,
+                    "amount": final_amount,
+                    "payment_method": final_method,
+                    "transaction_date": transaction_date,
+                    "status": "active",
+                    "parent_expense_id": expense_id,
+                    "operation_id": operation_id,
+                    "created_by": user_id,
+                }
+            )
+            .execute()
+            .data[0]
+        )
+        return {
+            "new_expense_id": inserted["id"],
+            "old_amount": float(old["amount"]),
+            "new_amount": final_amount,
+            "old_method": str(old["payment_method"]),
+            "new_method": final_method,
+            "category": str(old["category"]),
+            "description": final_desc,
+        }
+
     def record_customer_payment(
         self,
         *,

@@ -2533,7 +2533,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     const cashTotal = todaysSales.reduce((a, s) => a + s.paidAmount, 0);
     const udhaarTotal = salesTotal - cashTotal;
     const expensesTotal = expenses
-      .filter((e) => e.transactionDate === todayYmd && e.status !== "voided")
+      .filter((e) => e.transactionDate === todayYmd && e.status === "active")
       .reduce((a, e) => a + e.amount, 0);
     const movementsCount = movements.filter((m) => m.transactionDate === todayYmd).length;
     const outstandingTotal = customers.reduce((a, c) => a + c.outstandingBalance, 0);

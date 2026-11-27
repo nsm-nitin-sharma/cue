@@ -23,7 +23,10 @@ SECURITY & PRECISION RULES:
    - For Inventory CRUD: use `inventory_receive`, `inventory_damage`, `inventory_expiry`, `inventory_adjust`, `update_product_settings` (price/threshold updates), `archive_product`, or `query_business` (`query_topic: "stock_check"`).
    - For Khata (Customer Credit) CRUD: use `create_customer`, `update_customer`, `record_udhaar_credit` (direct credit without product), `record_customer_payment`, or `query_business` (`query_topic: "pending_payments"` or `"customer_balance"`).
 5. If the speaker gives MULTIPLE commands in one breath (e.g., "20 Maggi aayi, 10 Pepsi ki bottle aayi, 5 Maggi biki"), extract ALL operations in exact chronological order inside the `operations` array.
-6. For Hinglish corrections like "20 pepsi nahi 10 hi biki" or "Actually 7 the", set `intent` to "correct_last_sale" and set `quantity` to the FINAL corrected quantity (10 or 7, NOT 20).
+6. CORRECTION VS NEW OPERATION (CRITICAL — DO NOT DUPLICATE):
+   - If the user is correcting ANY detail of the immediately previous transaction in `active_context` (`last_operation_kind`, `last_expense_id`, `last_sale_id`) — e.g. "20 pepsi nahi 10 hi biki", "Actually 7 the", "cash nahi, UPI se kiya tha", "cash nahi UBI se kia tha", "1000 nahi 500 tha", "galti se cash bol diya" — output `intent: "correct_last_operation"` (or `"correct_last_sale"` for sale qty) with ONLY the corrected field(s) (`payment_method`, `total_amount`, `quantity`, `unit_price`). NEVER emit `record_expense` or `record_sale` for a correction!
+   - Normalize Whisper STT variants for payment methods: "UBI" / "U.P.I" / "GPay" / "PhonePe" / "Paytm" -> `"upi"`.
+   - If user explicitly asks to add a new product ("Surf Excel naya product add kar do", "50 surf excel 100g packet new product aaya hai"), set `intent: "create_product"`, `product_query`, `quantity`, `unit`, `unit_price`.
 7. If an utterance refers to prior context ("unmein se 3 damaged hain", "kal jo Pepsi aayi thi, wo expired thi"), set `uses_prior_context: true`, preserve `relative_date` ("kal", "yesterday", "parso"), and fill only what was spoken.
 8. If `active_context.pending_flow` is present (e.g., asking "Do you mean Coca-Cola?" or asking for purchase price / variant):
    - Set `intent: "clarify_response"`.
@@ -38,7 +41,7 @@ SECURITY & PRECISION RULES:
   "clarification_question": string | null,
   "operations": [
     {
-      "intent": "inventory_receive" | "inventory_damage" | "inventory_expiry" | "inventory_adjust" | "record_sale" | "record_expense" | "record_customer_payment" | "record_udhaar_credit" | "create_customer" | "update_customer" | "update_product_settings" | "archive_product" | "correct_last_sale" | "undo_last_operation" | "business_day_replay" | "query_business" | "clarify_response" | "create_product" | "unknown",
+      "intent": "inventory_receive" | "inventory_damage" | "inventory_expiry" | "inventory_adjust" | "record_sale" | "record_expense" | "record_customer_payment" | "record_udhaar_credit" | "create_customer" | "update_customer" | "update_product_settings" | "archive_product" | "correct_last_sale" | "correct_last_operation" | "undo_last_operation" | "business_day_replay" | "query_business" | "clarify_response" | "create_product" | "unknown",
       "product_query": string | null,
       "customer_query": string | null,
       "quantity": number | null,
@@ -99,11 +102,31 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[VoiceOperationItem(intent="clarify_response", is_negative=True)],
         )
 
-    if re.search(r"(actually|ki\s+jagah|\d+.*\bnahi\b.*\d+)", lower):
+    if re.search(r"(cash\s+nahi|upi\s+nahi|ubi\s+se|upi\s+se\s+kiya|galti\s+se|actually|ki\s+jagah|\d+.*\bnahi\b.*\d+)", lower):
         qty = extract_post_negation_number(utterance)
+        pm: str | None = None
+        if re.search(r"\b(upi|ubi|gpay|phonepe|paytm)\b", lower):
+            pm = "upi"
+        elif re.search(r"\bcash\b", lower) and not re.search(r"\bcash\s+nahi\b", lower):
+            pm = "cash"
+        elif re.search(r"\bbank\b", lower):
+            pm = "bank"
+        if pm is not None and qty is None:
+            return IntentProposal(
+                detected_language=lang,  # type: ignore[arg-type]
+                operations=[VoiceOperationItem(intent="correct_last_operation", payment_method=pm, uses_prior_context=True)],  # type: ignore[arg-type]
+            )
         return IntentProposal(
             detected_language=lang,  # type: ignore[arg-type]
-            operations=[VoiceOperationItem(intent="correct_last_sale", quantity=qty, uses_prior_context=True)],
+            operations=[
+                VoiceOperationItem(
+                    intent="correct_last_operation",
+                    quantity=qty,
+                    total_amount=qty,
+                    payment_method=pm,  # type: ignore[arg-type]
+                    uses_prior_context=True,
+                )
+            ],
         )
 
     if re.search(r"\b(undo|cancel last|wapas karo)\b", lower):
