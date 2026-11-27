@@ -40,9 +40,9 @@
 
 ## 3. Voice Pipeline & Modular AI/Speech Stack (100% Free)
 
-- [ ] Browser `MediaRecorder` capture with cross-browser codec negotiation (`webm/opus` → `webm` → `mp4`)
-- [ ] Web Audio API live frequency waveform + RMS silence/noise pre-check
-- [ ] Browser `SpeechSynthesis` spoken responses (`hi-IN` / `en-IN` voices + mute/replay controls)
+- [x] Browser `MediaRecorder` capture with cross-browser codec negotiation (`webm/opus` → `webm` → `mp4`)
+- [x] Web Audio API live frequency waveform + RMS silence/noise pre-check
+- [x] Browser `SpeechSynthesis` spoken responses (`hi-IN` / `en-IN` voices + mute/replay controls)
 - [ ] **Modular `STTProvider` Interface:**
   - [ ] Default: **Groq Free Tier Whisper (`whisper-large-v3-turbo`)** (zero PC load, preserves Gemini quota)
   - [ ] Optional local: **`faster-whisper`** (`base`/`small` int8 CPU)
@@ -107,18 +107,18 @@
 
 - [ ] Empty/silent/noisy recording rejection with instant retry prompt (no LLM waste or DB mutation)
 - [ ] Partial clarification (ask user to repeat only unclear quantity or detail)
-- [ ] **Browser `IndexedDB` FIFO Offline Queue:** Stores audio/pending operations offline with `Pending Sync` badge, replays strictly in chronological order on reconnect with idempotency protection
+- [x] **Browser `IndexedDB` FIFO Offline Queue:** Stores audio/pending operations offline with `Pending Sync` badge, replays strictly in chronological order on reconnect with idempotency protection
 
 ---
 
 ## 8. Bespoke Minimal UI/UX ("Warm Ledger & Studio Voice")
 
-- [ ] Desktop-first, responsive warm light theme (`#FAF8F5` paper canvas, `#171614` ink, `#D95D39` living voice accent, tabular monospace numerals)
-- [ ] **Voice Desk (Home):** Prominent **Living Mic Orb** (`Space` / `Ctrl+M` shortcut), live waveform, clear status states (`Listening`, `Transcribing`, `Validating`, `Saved`, `Needs Clarification`, `Confirm Required`, `Pending Sync`, `Error`)
-- [ ] Tactile **Paper-Slip Receipt Cards** in the conversation stream with quick `Undo` / `Edit` / `Confirm` controls
-- [ ] **30-Day Daily Chat Sidebar** (`Today`, `Yesterday`, ..., past 30 days)
-- [ ] Live **"Today's Ledger Pulse"** side strip updating smoothly on voice commits
-- [ ] Dedicated Dashboard Views: **Inventory**, **Sales**, **Customers (Udhaar)**, **Expenses**, and **Reports / Business Day Replay**
+- [x] Desktop-first, responsive warm light theme (`#FAF8F5` paper canvas, `#171614` ink, `#D95D39` living voice accent, tabular monospace numerals)
+- [x] **Voice Desk (Home):** Prominent **Living Mic Orb** (`Space` / `Ctrl+M` shortcut), live waveform, clear status states (`Listening`, `Transcribing`, `Validating`, `Saved`, `Needs Clarification`, `Confirm Required`, `Pending Sync`, `Error`)
+- [x] Tactile **Paper-Slip Receipt Cards** in the conversation stream with quick `Undo` / `Edit` / `Confirm` controls
+- [x] **30-Day Daily Chat Sidebar** (`Today`, `Yesterday`, ..., past 30 days)
+- [x] Live **"Today's Ledger Pulse"** side strip updating smoothly on voice commits
+- [x] Dedicated Dashboard Views: **Inventory**, **Sales**, **Customers (Udhaar)**, **Expenses**, and **Reports / Business Day Replay**
 
 ---
 
@@ -126,5 +126,5 @@
 
 - [ ] Security Tests: Destructive-intent blocking, prompt-injection defense, JWT/tenant isolation, idempotency conflict (`409`), `₹5,000` confirmation token gate, negative-stock block
 - [ ] Unit & Domain Tests: Hinglish number/fraction parser, unit converter, `"Do you mean?"` + alias learning, `>30 days` boundary, correction audit trails
-- [ ] Frontend Verification: TypeScript strict check & Next.js production build
+- [x] Frontend Verification: TypeScript strict check & Next.js production build
 - [ ] End-to-End Live Voice Walkthrough against Supabase + Gemini + Groq Whisper

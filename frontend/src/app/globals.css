@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    background-color: #FAF8F5;
+    color: #171614;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #FAF8F5;
+    color: #171614;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tactile perforated receipt slip subtle edge */
+.receipt-slip {
+  position: relative;
+  background: #FFFFFF;
+  border: 1px solid #E5DFD5;
+  box-shadow: 0 1px 2px rgba(23, 22, 20, 0.04), 0 6px 20px rgba(23, 22, 20, 0.04);
+}
+
+.receipt-slip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--slip-accent, #1E6B52);
+}
+
+/* Subtle paper grain background texture */
+.paper-grain {
+  background-image: radial-gradient(rgba(23, 22, 20, 0.025) 1px, transparent 0);
+  background-size: 20px 20px;
+}
+
+/* Minimal warm scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #DCD5C9;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #C4BCB0;
+}
