@@ -173,7 +173,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             type="button"
             onClick={() => setRegisterOpen(true)}
             className="inline-flex items-center gap-2.5 px-3 py-1 rounded-md text-xs bg-paper border border-rule hover:border-rule-strong transition-colors"
-            title={isLiveBackend ? "Connected to Supabase + Groq Whisper + Gemini" : "Local Mode — Sign in for Live AI"}
+            title={isLiveBackend ? "Connected to Live Cloud Store" : "Local Mode — Sign in for Live AI"}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? "bg-sage" : "bg-ochre"}`} />
             <span className="hidden lg:inline text-[10px] font-mono uppercase tracking-wider text-ink-muted">
@@ -251,8 +251,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </button>
       </div>
 
-      {/* Main Stage */}
-      <main className="flex-1 flex flex-col min-h-0">{children}</main>
+      {/* Main Stage with minimal premium route transition */}
+      <main className="flex-1 flex flex-col min-h-0">
+        <div key={pathname} className="flex-1 flex flex-col min-h-0 animate-page-enter">
+          {children}
+        </div>
+      </main>
 
       {/* Persistent Mini Voice Trigger on Secondary Views */}
       {pathname !== "/" && (
@@ -268,8 +272,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Slide-Over Drawer 1: 30-Day Daily Ledger History */}
       {historyOpen && (
-        <div className="fixed inset-0 z-50 flex justify-start bg-ink/25 backdrop-blur-[2px]">
-          <div className="w-full max-w-sm bg-paper-elevated h-full border-r border-rule shadow-dock flex flex-col animate-slip-in">
+        <div className="fixed inset-0 z-50 flex justify-start bg-ink/25 backdrop-blur-[2px] animate-fade-backdrop">
+          <div className="w-full max-w-sm bg-paper-elevated h-full border-r border-rule shadow-dock flex flex-col animate-drawer-left">
             <div className="px-5 py-4 border-b border-rule flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">
@@ -326,9 +330,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Slide-Over Drawer 2: Register Summary, Guardrails & Controls */}
       {registerOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-ink/25 backdrop-blur-[2px]">
+        <div className="fixed inset-0 z-50 flex justify-end bg-ink/25 backdrop-blur-[2px] animate-fade-backdrop">
           <div className="flex-1" onClick={() => setRegisterOpen(false)} />
-          <div className="w-full max-w-sm bg-paper-elevated h-full border-l border-rule shadow-dock flex flex-col animate-slip-in">
+          <div className="w-full max-w-sm bg-paper-elevated h-full border-l border-rule shadow-dock flex flex-col animate-drawer-right">
             <div className="px-5 py-4 border-b border-rule flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">

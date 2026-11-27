@@ -561,7 +561,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         ]);
       }
       setIsLiveBackend(true);
-      setStatusMessage("Live · Groq Whisper + Gemini");
+      setStatusMessage("Live");
     } catch (err) {
       const msg = err instanceof Error ? err.message.toLowerCase() : "";
       if (msg.includes("no store") || msg.includes("404") || msg.includes("onboard")) {
@@ -2557,7 +2557,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
       if (isLiveBackend && !isOffline && audioBlob.size > 400) {
         try {
           setVoicePhase("transcribing");
-          setStatusMessage("Groq Whisper Transcribing...");
+          setStatusMessage("Processing audio...");
           const res = await sendVoiceAudioTurn(audioBlob, opId, language);
           await applyRemoteTurnResult(res, { includeUserTranscript: true });
           return;

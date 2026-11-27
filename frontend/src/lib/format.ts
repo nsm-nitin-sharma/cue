@@ -44,3 +44,34 @@ export function makeOperationId(): string {
   }
   return `op-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
+
+export function formatPaymentMethod(method?: string | null): string {
+  const m = (method ?? "cash").toLowerCase();
+  if (m === "upi" || m === "online") return "Online";
+  if (m === "bank") return "Bank";
+  if (m === "credit") return "Udhaar";
+  return "Cash";
+}
+
+export type TimePeriodFilter = "today" | "week" | "month" | "prev_month" | "year" | "all";
+
+export function isDateInPeriod(ymd: string, period: TimePeriodFilter, todayYmd: string): boolean {
+  if (period === "all") return true;
+  if (period === "today") return ymd === todayYmd;
+  const [ty, tm] = todayYmd.split("-").map(Number);
+  const [y, m] = ymd.split("-").map(Number);
+  if (period === "year") return y === ty;
+  if (period === "month") return y === ty && m === tm;
+  if (period === "prev_month") {
+    const prevM = tm === 1 ? 12 : tm - 1;
+    const prevY = tm === 1 ? ty - 1 : ty;
+    return y === prevY && m === prevM;
+  }
+  if (period === "week") {
+    const tMs = Date.parse(`${todayYmd}T00:00:00Z`);
+    const dMs = Date.parse(`${ymd}T00:00:00Z`);
+    const diffDays = (tMs - dMs) / 86_400_000;
+    return diffDays >= 0 && diffDays < 7;
+  }
+  return true;
+}

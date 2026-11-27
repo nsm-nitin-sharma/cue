@@ -138,7 +138,7 @@ class QueryEngine:
                 "lines": [
                     {
                         "label": str(e.get("description") or e.get("category") or "Expense"),
-                        "value": f"₹{float(e['amount']):,.0f} ({str(e.get('payment_method') or 'cash').upper()})",
+                        "value": f"₹{float(e['amount']):,.0f} ({'Online' if str(e.get('payment_method') or 'cash').lower() == 'upi' else str(e.get('payment_method') or 'cash').title()})",
                         "tone": "crimson",
                     }
                     for e in exps[:6]

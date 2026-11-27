@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Square, Keyboard, ListChecks, ArrowUp, X } from "lucide-react";
+import { Mic, Square, Keyboard, ListChecks, ArrowUp, X, Loader2 } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { StatusPill } from "@/components/ui/LedgerPrimitives";
 import { stopSpeaking } from "@/lib/tts";
@@ -249,6 +249,8 @@ export function LivingAcousticOrb() {
     }
   }, [language, setVoicePhase]);
 
+  const isProcessing = voicePhase === "transcribing" || voicePhase === "validating";
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = document.activeElement?.tagName;
@@ -257,13 +259,14 @@ export function LivingAcousticOrb() {
         (e.code === "Space" && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT")
       ) {
         e.preventDefault();
+        if (isProcessing) return;
         if (isRecording) stopRecording();
         else startRecording();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isRecording, startRecording, stopRecording]);
+  }, [isProcessing, isRecording, startRecording, stopRecording]);
 
   const handleTextSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -385,15 +388,26 @@ export function LivingAcousticOrb() {
 
         <button
           type="button"
+          disabled={isProcessing}
           onClick={isRecording ? stopRecording : startRecording}
-          aria-label={isRecording ? "Stop listening" : "Start voice command"}
-          className={`relative w-[74px] h-[74px] rounded-full flex items-center justify-center transition-all duration-200 shadow-orb border ${
-            isRecording
-              ? "bg-vermilion border-vermilion text-white scale-105"
-              : "bg-ink hover:bg-vermilion border-ink hover:border-vermilion text-white"
+          aria-label={
+            isProcessing
+              ? "Processing command"
+              : isRecording
+                ? "Stop listening"
+                : "Start voice command"
+          }
+          className={`relative w-[74px] h-[74px] rounded-full flex items-center justify-center transition-all duration-300 shadow-orb border ${
+            isProcessing
+              ? "bg-paper-subtle border-rule-strong text-ink-muted cursor-not-allowed scale-95"
+              : isRecording
+                ? "bg-vermilion border-vermilion text-white scale-105"
+                : "bg-ink hover:bg-vermilion border-ink hover:border-vermilion text-white animate-orb-breathe"
           }`}
         >
-          {isRecording ? (
+          {isProcessing ? (
+            <Loader2 className="w-6 h-6 animate-spin" />
+          ) : isRecording ? (
             <Square className="w-5 h-5 fill-current" />
           ) : (
             <Mic className="w-6 h-6 stroke-[1.75]" />
@@ -404,8 +418,14 @@ export function LivingAcousticOrb() {
       {/* Institutional Status & Quiet Actions */}
       <div className="mt-3 flex flex-col items-center gap-2">
         <div className="flex items-center gap-2">
-          <StatusPill tone={phaseTone} dot={voicePhase === "listening" || voicePhase === "validating"}>
-            {isRecording ? "Listening" : isOffline ? "Offline Queue Ready" : statusMessage}
+          <StatusPill tone={phaseTone} dot={voicePhase === "listening" || isProcessing}>
+            {isRecording
+              ? "Listening"
+              : isProcessing
+                ? "Processing..."
+                : isOffline
+                  ? "Offline Queue Ready"
+                  : statusMessage}
           </StatusPill>
           {micError && <span className="text-[11px] text-crimson">{micError}</span>}
         </div>

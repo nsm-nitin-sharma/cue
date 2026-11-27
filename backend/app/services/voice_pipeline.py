@@ -696,6 +696,8 @@ class VoicePipelineService:
             qty = float(draft["quantity"])
             unit_price = float(draft.get("unit_price") or product.get("default_selling_price") or 0)
             p_status = draft.get("payment_status") or "paid"
+            p_method = draft.get("payment_method") or "cash"
+            cust_name = draft.get("customer_name")
             total = qty * unit_price
             paid = total if p_status == "paid" else float(draft.get("paid_amount") or 0)
             rpc = self.tx.record_sale(
@@ -717,17 +719,27 @@ class VoicePipelineService:
             context_state["last_sale_id"] = str(rpc["sale_id"])
             context_state["last_operation_kind"] = "record_sale"
             context_state["last_operation_id"] = operation_id
-            reply = f"{qty:g} {product['name']} ki sale (₹{total:,.0f}) save ho gayi."
+            method_label = "Online" if p_method == "upi" else ("Bank" if p_method == "bank" else "Cash")
+            if p_status == "credit":
+                who = cust_name or "Customer"
+                reply = f"{qty:g} {product['name']} {who} ke Khata mein Udhaar (₹{total:,.0f}) add ho gayi. Revenue mein abhi add nahi hua."
+                subtitle = f"Udhaar · {who} (Unpaid)"
+                extra_lines = [{"label": "Khata Udhaar", "value": f"₹{total:,.0f} (Not in revenue)", "tone": "ochre"}]
+            else:
+                reply = f"{qty:g} {product['name']} ki {method_label} sale (₹{total:,.0f}) save ho gayi."
+                subtitle = f"{cust_name + ' · ' if cust_name else ''}{method_label} Sale"
+                extra_lines = [{"label": "Payment", "value": method_label, "tone": "sage"}]
             slip = {
                 "id": f"slip-{operation_id}",
                 "operationId": operation_id,
                 "kind": "sale",
                 "title": f"Sale · {product['name']}",
-                "subtitle": "Credit (Udhaar)" if p_status == "credit" else "Walk-in Cash Sale",
+                "subtitle": subtitle,
                 "transactionDate": txn_date,
                 "amountINR": total,
                 "lines": [
                     {"label": product["name"], "value": f"-{qty:g} {product['base_unit']} @ ₹{unit_price:g}", "tone": "sage"},
+                    *extra_lines,
                     {"label": "Stock Level", "value": f"{rpc['before_qty']:g} → {rpc['after_qty']:g}", "tone": "neutral"},
                 ],
                 "status": "saved",
@@ -785,7 +797,8 @@ class VoicePipelineService:
             context_state["last_expense_id"] = str(exp["id"])
             context_state["last_operation_kind"] = "record_expense"
             context_state["last_operation_id"] = operation_id
-            reply = f"₹{amt:,.0f} ka {cat} expense ({method.upper()}) save ho gaya."
+            method_label = "Online" if method == "upi" else method.title()
+            reply = f"₹{amt:,.0f} ka {cat} expense ({method_label}) save ho gaya."
             slip = {
                 "id": f"slip-{operation_id}",
                 "operationId": operation_id,
@@ -794,7 +807,7 @@ class VoicePipelineService:
                 "subtitle": desc,
                 "transactionDate": txn_date,
                 "amountINR": amt,
-                "lines": [{"label": "Paid Via", "value": method.upper(), "tone": "neutral"}],
+                "lines": [{"label": "Paid Via", "value": method_label, "tone": "neutral"}],
                 "status": "saved",
                 "reversible": True,
             }
@@ -930,8 +943,10 @@ class VoicePipelineService:
                         new_description=op.description,
                     )
                     context_state["last_expense_id"] = str(corr_exp["new_expense_id"])
+                    old_m = "Online" if corr_exp["old_method"] == "upi" else corr_exp["old_method"].title()
+                    new_m = "Online" if corr_exp["new_method"] == "upi" else corr_exp["new_method"].title()
                     replies.append(
-                        f"{corr_exp['category']} expense update ho gaya: ₹{corr_exp['new_amount']:,.0f} ({corr_exp['old_method'].upper()} → {corr_exp['new_method'].upper()})."
+                        f"{corr_exp['category']} expense update ho gaya: ₹{corr_exp['new_amount']:,.0f} ({old_m} → {new_m})."
                     )
                     receipts.append(
                         {
@@ -943,7 +958,7 @@ class VoicePipelineService:
                             "transactionDate": today_str,
                             "amountINR": corr_exp["new_amount"],
                             "lines": [
-                                {"label": "Method", "value": f"{corr_exp['old_method'].upper()} → {corr_exp['new_method'].upper()}", "tone": "sage"},
+                                {"label": "Method", "value": f"{old_m} → {new_m}", "tone": "sage"},
                                 {"label": "Amount", "value": f"₹{corr_exp['new_amount']:,.0f}", "tone": "neutral"},
                             ],
                             "status": "corrected",
@@ -1220,6 +1235,46 @@ class VoicePipelineService:
                     )
 
                 try:
+                    resolved_customer_id: str | None = None
+                    resolved_customer_name: str | None = None
+                    if op.intent == "record_sale" and op.customer_query:
+                        cres_sale = resolve_customer(op.customer_query, customers)
+                        if cres_sale.status == "ambiguous" and cres_sale.candidates:
+                            names = " ya ".join(c["name"] for c in cres_sale.candidates)
+                            msg = f"Khata mein {len(cres_sale.candidates)} {op.customer_query} hain ({names}). Kaunse customer ke liye?"
+                            return VoiceTurnResult(
+                                operation_id=operation_id,
+                                status="needs_clarification",
+                                transcript=raw_transcript,
+                                reply=msg,
+                                language=language,  # type: ignore[arg-type]
+                                receipts=receipts,
+                                clarification={
+                                    "kind": "disambiguate_customer",
+                                    "prompt": msg,
+                                    "candidates": [
+                                        {
+                                            "id": str(c["id"]),
+                                            "label": c["name"],
+                                            "meta": f"Due ₹{float(c['outstanding_balance']):,.0f}",
+                                            "value": c["name"],
+                                        }
+                                        for c in cres_sale.candidates
+                                    ],
+                                },
+                            )
+                        if cres_sale.status == "exact" and cres_sale.customer:
+                            resolved_customer_id = str(cres_sale.customer["id"])
+                            resolved_customer_name = cres_sale.customer["name"]
+                        elif op.payment_status == "credit":
+                            new_cust = self.tx.create_customer(
+                                business_id=business_id,
+                                name=op.customer_query.title(),
+                            )
+                            customers.append(new_cust)
+                            resolved_customer_id = str(new_cust["id"])
+                            resolved_customer_name = new_cust["name"]
+
                     draft = {
                         "intent": op.intent,
                         "product_id": str(target_prod["id"]),
@@ -1228,7 +1283,10 @@ class VoicePipelineService:
                         "unit": target_prod["base_unit"],
                         "unit_price": op.unit_price,
                         "payment_status": op.payment_status or "paid",
+                        "payment_method": op.payment_method or "cash",
                         "paid_amount": op.paid_amount,
+                        "customer_id": resolved_customer_id,
+                        "customer_name": resolved_customer_name,
                         "transaction_date": txn_date_str,
                         "notes": op.notes,
                     }
@@ -1403,7 +1461,7 @@ class VoicePipelineService:
                                 "operationId": sub_op_id,
                                 "kind": "payment",
                                 "title": f"Payment Received · {cust['name']}",
-                                "subtitle": f"Via {(op.payment_method or 'cash').upper()}",
+                                "subtitle": f"Via {'Online' if (op.payment_method or 'cash') == 'upi' else (op.payment_method or 'cash').title()}",
                                 "transactionDate": txn_date_str,
                                 "amountINR": amt,
                                 "lines": [{"label": "Remaining Balance", "value": f"₹{pay['after_balance']:,.0f}", "tone": "sage"}],
