@@ -6,9 +6,9 @@ from app.providers.stt.base import STTProvider, STTResult
 
 _KIRANA_VOCAB_PROMPT = (
     "Indian kirana store conversation in Hindi, Hinglish, and English. "
-    "Products: Pepsi, Coca-Cola, Coke, Maggi, Tata Salt, Fortune Oil, Amul Milk, Parle-G, Nescafe. "
-    "Terms: bottles, packet, peti, box, kilo, litre, udhaar, bik gayi, aayi hain, damaged, expired, "
-    "bijli bill, Ramesh, Sunita, actually, nahi, payment pending."
+    "Products: Pepsi, Coca-Cola, Coke, Maggi, Maggie Masala, Tata Salt, Fortune Oil, Amul Milk, Parle-G, Nescafe. "
+    "Terms: bottles, packet, gram, peti, box, kilo, litre, cash, online, GPay, Google Pay, PhonePe, Paytm, "
+    "udhaar, bik gayi, aayi hain, damaged, expired, bijli bill, Ramesh, Sunita, actually, nahi, payment pending."
 )
 
 

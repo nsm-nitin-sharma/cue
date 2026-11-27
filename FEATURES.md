@@ -65,7 +65,7 @@
 ## 4. Strict "Do You Mean This?" Clarification, Multi-Variant Disambiguation & Slot-Filling
 
 - [x] **Multi-Variant Product Disambiguation (`entity_resolver.py`):**
-  - [x] When speaking a generic/shared product name (e.g., `"Coke"` or `"Maggi masala"`) matches multiple SKUs (e.g., `Maggi Masala 70g` vs `Maggi Masala 250 Gram`), Cue pauses, displays all matching variants with stock & price pills in chat, and lets the user **tap a chip or speak the exact variant/size**
+  - [x] When speaking a generic/shared product name (e.g., `"Coke"` or `"Maggi masala"`) matches multiple SKUs (e.g., `Maggi Masala 70g` vs `Maggi Masala 250 Gram`), Cue pauses, displays all matching variants with stock & price pills in chat, and lets the user **tap a chip or speak the exact variant/size** while preserving `payment_method` (`Online` / `GPay` / `Cash`) & `Udhaar` customer context across the clarification
   - [x] **Alias-Safe Multi-Variant Check:** Multi-variant ambiguity is checked *before* older single-SKU verified aliases so adding a 2nd variant later (`Maggi Masala 250 Gram`) always restores disambiguation
   - [x] **LLM Over-Normalization & Repeated-Turn Disambiguation Guard:** Prevents AI from silently injecting an unspoken size (`70g`) or falling back to `Yes/No` confirmation chips when multiple variants exist across consecutive turns, ensuring product chips and Devanagari size replies (`"मेगी मसाला 70 gram"`) always resolve cleanly
   - [x] **Strict Size-Token Mismatch Guard & Packaging Stopword Isolation:** Explicit sizes (`250g` vs `70g`) never cross-match; unit-equivalent exact matching (`250g` == `250 gram`) works automatically; generic words (`packet`, `gram`, `bottle`) never falsely match unrelated products

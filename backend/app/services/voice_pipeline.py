@@ -732,6 +732,20 @@ class VoicePipelineService:
             self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, raw_transcript, language, stt_provider, stt_confidence, draft, "needs_confirmation", "tier3", [], res, context_state, user_id)
             return res
 
+        if intent == "record_sale" and draft.get("customer_query") and not draft.get("customer_id"):
+            cres_d = resolve_customer(str(draft["customer_query"]), customers)
+            if cres_d.status == "exact" and cres_d.customer:
+                draft["customer_id"] = str(cres_d.customer["id"])
+                draft["customer_name"] = cres_d.customer["name"]
+            elif (draft.get("payment_status") == "credit") and cres_d.status == "not_found":
+                new_cust = self.tx.create_customer(
+                    business_id=business_id,
+                    name=str(draft["customer_query"]).title(),
+                )
+                customers.append(new_cust)
+                draft["customer_id"] = str(new_cust["id"])
+                draft["customer_name"] = new_cust["name"]
+
         # Execute atomically!
         receipt, reply = self._commit_draft_now(
             draft=draft,
@@ -1315,7 +1329,16 @@ class VoicePipelineService:
                     pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
                     if pres.status == "exact":
                         target_prod = pres.product
-                    elif pres.status == "verify_alias" and pres.product:
+                    inferred_pm = op.payment_method or (
+                        "upi"
+                        if re.search(
+                            r"\b(online|upi|ubi|gpay|google\s*paye?|phonepe|paytm)\b",
+                            raw_transcript,
+                            re.IGNORECASE,
+                        )
+                        else "cash"
+                    )
+                    if pres.status == "verify_alias" and pres.product:
                         remaining = [item.model_dump() for item in operations[idx + 1 :]]
                         if remaining:
                             context_state["pending_batch_items"] = remaining
@@ -1324,6 +1347,10 @@ class VoicePipelineService:
                             "quantity": op.quantity or 1,
                             "unit_price": op.unit_price,
                             "payment_status": op.payment_status or "paid",
+                            "payment_method": inferred_pm,
+                            "paid_amount": op.paid_amount,
+                            "customer_query": op.customer_query,
+                            "notes": op.notes,
                             "transaction_date": txn_date_str,
                         }
                         context_state["pending_flow"] = {
@@ -1371,6 +1398,10 @@ class VoicePipelineService:
                             "quantity": op.quantity or 1,
                             "unit_price": op.unit_price,
                             "payment_status": op.payment_status or "paid",
+                            "payment_method": inferred_pm,
+                            "paid_amount": op.paid_amount,
+                            "customer_query": op.customer_query,
+                            "notes": op.notes,
                             "transaction_date": txn_date_str,
                         }
                         context_state["pending_flow"] = {
