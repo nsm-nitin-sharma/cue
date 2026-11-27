@@ -161,3 +161,34 @@ export async function deleteAccountRemote() {
     method: "DELETE",
   });
 }
+
+export async function addManualExpenseRemote(payload: {
+  category: string;
+  description: string;
+  amount: number;
+  payment_method: "cash" | "upi" | "bank" | "credit";
+  transaction_date?: string;
+}) {
+  return apiFetch<Record<string, unknown>>("/expenses", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function recordCustomerPaymentRemote(payload: {
+  customer_id: string;
+  amount: number;
+  payment_method: "cash" | "upi" | "bank";
+}) {
+  return apiFetch<Record<string, unknown>>("/customers/payments", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function reverseOperationRemote(operationId: string) {
+  return apiFetch<{ status: string; reversed: boolean; summary: string }>(
+    `/operations/${encodeURIComponent(operationId)}/reverse`,
+    { method: "POST" }
+  );
+}

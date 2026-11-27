@@ -1008,6 +1008,39 @@ class VoicePipelineService:
                 )
                 continue
 
+            if op.intent == "undo_last_operation":
+                target_op = context_state.get("last_operation_id")
+                if not target_op:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply="Abhi koi pichla transaction reverse karne ke liye active nahi hai.",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                rev = self.tx.reverse_operation(
+                    business_id=business_id,
+                    user_id=user_id,
+                    operation_id=str(target_op),
+                    reversal_operation_id=sub_op_id,
+                    transaction_date=today_str,
+                )
+                context_state.pop("last_operation_id", None)
+                replies.append(f"Pichla operation reverse ho gaya ({rev['summary']}).")
+                receipts.append(
+                    {
+                        "id": f"slip-{sub_op_id}",
+                        "operationId": sub_op_id,
+                        "kind": "correction",
+                        "title": "Operation Reversed",
+                        "subtitle": "Compensating reversal committed",
+                        "transactionDate": today_str,
+                        "lines": [{"label": "Reversed", "value": rev["summary"], "tone": "ochre"}],
+                        "status": "undone",
+                    }
+                )
+                continue
+
             if op.intent in {"correct_last_sale", "correct_last_operation"}:
                 last_kind = context_state.get("last_operation_kind")
                 exp_id = context_state.get("last_expense_id")

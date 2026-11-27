@@ -11,6 +11,7 @@ import { formatINR, formatQty, formatTimeIST, getTodayIST, makeOperationId } fro
 import { speakReply, stopSpeaking } from "@/lib/tts";
 import { supabase } from "@/lib/supabase";
 import {
+  addManualExpenseRemote,
   addManualProductRemote,
   archiveProductRemote,
   clearUnusedCatalogRemote,
@@ -18,6 +19,8 @@ import {
   createProductFromPopupRemote,
   deleteAccountRemote,
   fetchWorkspaceBootstrap,
+  recordCustomerPaymentRemote,
+  reverseOperationRemote,
   sendTextCommandRemote,
   sendVoiceAudioTurn,
   syncOfflineBatchRemote,
@@ -1332,6 +1335,32 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
 
   const undoReceipt = useCallback(
     (operationId: string) => {
+      if (isLiveBackend && !isOffline) {
+        reverseOperationRemote(operationId)
+          .then(async (res) => {
+            const msg = res.reversed
+              ? `Operation reverse ho gaya (${res.summary}) aur immutable audit log mein mark kar diya gaya.`
+              : `Operation reverse kar diya gaya.`;
+            appendEntriesToDate(todayYmd, [
+              {
+                id: `undo-${Date.now()}`,
+                role: "assistant",
+                content: msg,
+                timestamp: formatTimeIST(new Date().toISOString()),
+                language,
+              },
+            ]);
+            setVoicePhase("saved");
+            setStatusMessage("Operation Reversed");
+            speakReply(msg, language, ttsEnabled);
+            await refreshLiveWorkspace();
+          })
+          .catch(() => {
+            setVoicePhase("error");
+            setStatusMessage("Reversal Failed");
+          });
+        return;
+      }
       const mov = movements.find((m) => m.operationId === operationId);
       const nowIso = new Date().toISOString();
       if (mov) {
@@ -1407,7 +1436,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
       ]);
       speakReply(msg, language, ttsEnabled);
     },
-    [appendEntriesToDate, language, movements, sales, todayYmd, ttsEnabled]
+    [appendEntriesToDate, isLiveBackend, isOffline, language, movements, refreshLiveWorkspace, sales, todayYmd, ttsEnabled]
   );
 
   const applyRemoteTurnResult = useCallback(
@@ -1491,10 +1520,21 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         ]);
       }
 
+      if (newProductDraft && !opts?.fromOfflineSync) {
+        if (/^(yes|haan|ha\b|ji|bilkul|confirm|add kar|ok)\b/i.test(lower)) {
+          confirmNewProductFromModal(newProductDraft);
+          return;
+        }
+        if (/^(no|nahi|na\b|cancel|mat)\b/i.test(lower)) {
+          dismissNewProductModal();
+          return;
+        }
+      }
+
       if (isLiveBackend && !isOffline && !opts?.fromOfflineSync) {
         try {
           setVoicePhase("validating");
-          setStatusMessage("Processing via Gemini + Supabase");
+          setStatusMessage("Processing...");
           const remoteRes = await sendTextCommandRemote(text, opId, language);
           await applyRemoteTurnResult(remoteRes, { includeUserTranscript: false });
           return;
@@ -2496,16 +2536,61 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
   const addManualExpense = useCallback(
     (e: Omit<Expense, "id" | "operationId" | "createdAt" | "status">) => {
       const opId = makeOperationId();
+      if (isLiveBackend && !isOffline) {
+        addManualExpenseRemote({
+          category: e.category,
+          description: e.description,
+          amount: e.amount,
+          payment_method: e.paymentMethod,
+          transaction_date: e.transactionDate,
+        })
+          .then(() => refreshLiveWorkspace())
+          .catch(() => {
+            setExpenses((prev) => [
+              { ...e, id: `exp-${opId}`, operationId: opId, status: "active", createdAt: new Date().toISOString() },
+              ...prev,
+            ]);
+          });
+        return;
+      }
       setExpenses((prev) => [
         { ...e, id: `exp-${opId}`, operationId: opId, status: "active", createdAt: new Date().toISOString() },
         ...prev,
       ]);
     },
-    []
+    [isLiveBackend, isOffline, refreshLiveWorkspace]
   );
 
   const recordManualCustomerPayment = useCallback(
     (customerId: string, amount: number, method: "cash" | "upi" | "bank") => {
+      const methodLabel = method === "upi" ? "Online" : method === "bank" ? "Bank" : "Cash";
+      if (isLiveBackend && !isOffline) {
+        recordCustomerPaymentRemote({
+          customer_id: customerId,
+          amount,
+          payment_method: method,
+        })
+          .then(async () => {
+            const cust = customers.find((c) => c.id === customerId);
+            if (cust) {
+              appendEntriesToDate(todayYmd, [
+                {
+                  id: `pay-${Date.now()}`,
+                  role: "assistant",
+                  content: `${cust.name} se ${formatINR(amount)} (${methodLabel}) payment receive ho gaya.`,
+                  timestamp: formatTimeIST(new Date().toISOString()),
+                  language,
+                },
+              ]);
+            }
+            await refreshLiveWorkspace();
+          })
+          .catch(() => {
+            setVoicePhase("error");
+            setStatusMessage("Payment Sync Failed");
+          });
+        return;
+      }
       setCustomers((prev) =>
         prev.map((c) =>
           c.id === customerId ? { ...c, outstandingBalance: Math.max(0, c.outstandingBalance - amount) } : c
@@ -2517,14 +2602,14 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           {
             id: `pay-${Date.now()}`,
             role: "assistant",
-            content: `${cust.name} se ${formatINR(amount)} (${method.toUpperCase()}) payment receive ho gaya.`,
+            content: `${cust.name} se ${formatINR(amount)} (${methodLabel}) payment receive ho gaya.`,
             timestamp: formatTimeIST(new Date().toISOString()),
             language,
           },
         ]);
       }
     },
-    [appendEntriesToDate, customers, language, todayYmd]
+    [appendEntriesToDate, customers, isLiveBackend, isOffline, language, refreshLiveWorkspace, todayYmd]
   );
 
   const todayStats = useMemo(() => {

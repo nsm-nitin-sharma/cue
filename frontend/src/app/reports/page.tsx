@@ -74,10 +74,14 @@ export default function ReportsPage() {
           </form>
 
           {/* Daily Financial Snapshot */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
             <div className="p-4 rounded-2xl bg-paper-elevated border border-rule">
               <p className="text-[11px] font-mono uppercase text-ink-muted">Today Sales</p>
               <Amount value={todayStats.salesTotal} className="text-xl font-semibold text-ink mt-1 block" />
+            </div>
+            <div className="p-4 rounded-2xl bg-paper-elevated border border-rule">
+              <p className="text-[11px] font-mono uppercase text-ink-muted">Today Revenue</p>
+              <Amount value={todayStats.cashTotal} className="text-xl font-semibold text-sage mt-1 block" />
             </div>
             <div className="p-4 rounded-2xl bg-paper-elevated border border-rule">
               <p className="text-[11px] font-mono uppercase text-ink-muted">Today Expenses</p>

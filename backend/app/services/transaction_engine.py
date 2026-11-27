@@ -642,3 +642,122 @@ class TransactionEngine:
             "business_id", business_id
         ).in_("id", unused_ids).execute()
         return len(unused_ids)
+
+    def reverse_operation(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        operation_id: str,
+        reversal_operation_id: str,
+        transaction_date: str,
+    ) -> dict[str, Any]:
+        reversed_parts: list[str] = []
+
+        # 1. Reverse active sale (and unpaid Udhaar balance if credit)
+        sales_rows = (
+            self.db.table("sales")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("operation_id", operation_id)
+            .eq("status", "active")
+            .execute()
+            .data
+            or []
+        )
+        for sale in sales_rows:
+            self.db.table("sales").update({"status": "voided"}).eq("id", sale["id"]).eq(
+                "business_id", business_id
+            ).execute()
+            unpaid = max(0.0, float(sale["total_amount"]) - float(sale["paid_amount"]))
+            if sale.get("customer_id") and unpaid > 0:
+                cust_rows = (
+                    self.db.table("customers")
+                    .select("outstanding_balance")
+                    .eq("id", sale["customer_id"])
+                    .eq("business_id", business_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if cust_rows:
+                    new_bal = max(0.0, float(cust_rows[0]["outstanding_balance"]) - unpaid)
+                    self.db.table("customers").update(
+                        {"outstanding_balance": new_bal, "updated_at": "now()"}
+                    ).eq("id", sale["customer_id"]).eq("business_id", business_id).execute()
+            reversed_parts.append(f"Sale ₹{float(sale['total_amount']):,.0f}")
+
+        # 2. Reverse active expense
+        exp_rows = (
+            self.db.table("expenses")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("operation_id", operation_id)
+            .eq("status", "active")
+            .execute()
+            .data
+            or []
+        )
+        for ex in exp_rows:
+            self.db.table("expenses").update({"status": "voided"}).eq("id", ex["id"]).eq(
+                "business_id", business_id
+            ).execute()
+            reversed_parts.append(f"Expense ₹{float(ex['amount']):,.0f}")
+
+        # 3. Compensate inventory movements (append-only reversal)
+        mv_rows = (
+            self.db.table("inventory_movements")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("operation_id", operation_id)
+            .neq("movement_type", "reversal")
+            .execute()
+            .data
+            or []
+        )
+        for mv in mv_rows:
+            delta = float(mv["quantity_delta"])
+            inv_rows = (
+                self.db.table("inventory")
+                .select("current_quantity")
+                .eq("business_id", business_id)
+                .eq("product_id", mv["product_id"])
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if inv_rows:
+                curr_qty = float(inv_rows[0]["current_quantity"])
+                new_qty = max(0.0, curr_qty - delta)
+                self.db.table("inventory").update(
+                    {"current_quantity": new_qty, "updated_at": "now()"}
+                ).eq("business_id", business_id).eq("product_id", mv["product_id"]).execute()
+            self.db.table("inventory_movements").insert(
+                {
+                    "business_id": business_id,
+                    "product_id": mv["product_id"],
+                    "movement_type": "reversal",
+                    "quantity_delta": -delta,
+                    "unit": mv["unit"],
+                    "reference_type": "reversal",
+                    "reference_id": mv["id"],
+                    "operation_id": reversal_operation_id,
+                    "transaction_date": transaction_date,
+                    "notes": f"Reversal of {operation_id[:8]}",
+                    "created_by": user_id,
+                }
+            ).execute()
+            if not sales_rows:
+                reversed_parts.append(f"Stock {-delta:+g} {mv['unit']}")
+
+        # 4. Mark voice_transactions audit status
+        self.db.table("voice_transactions").update({"validation_status": "undone"}).eq(
+            "business_id", business_id
+        ).eq("operation_id", operation_id).execute()
+
+        return {
+            "reversed": bool(reversed_parts),
+            "summary": ", ".join(reversed_parts) if reversed_parts else "No active records to reverse",
+        }

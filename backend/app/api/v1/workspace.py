@@ -255,6 +255,23 @@ def clear_unused_inventory_products(
     return {"status": "ok", "archived_count": archived_count}
 
 
+@router.post("/operations/{operation_id}/reverse")
+def reverse_business_operation(
+    operation_id: str,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    tx = TransactionEngine(get_admin_supabase())
+    res = tx.reverse_operation(
+        business_id=business_id,
+        user_id=user["user_id"],
+        operation_id=operation_id,
+        reversal_operation_id=str(uuid.uuid4()),
+        transaction_date=get_business_today().isoformat(),
+    )
+    return {"status": "undone" if res["reversed"] else "noop", **res}
+
+
 @router.delete("/account")
 def delete_user_account(user: dict = Depends(get_current_user)) -> dict:
     """Permanently deletes the authenticated owner's store data and auth user so they can restart cleanly."""

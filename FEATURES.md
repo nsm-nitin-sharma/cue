@@ -35,6 +35,7 @@
   - [x] Server-side tier entitlement & monthly quota enforcement (`entitlements.py`)
 - [x] **Store Onboarding (Clean Empty Store by Default):** Brand-new stores start with zero preloaded fake items unless the owner explicitly opts in to sample kirana data
 - [x] **Visible Logged-In Account & Store Identity:** Clear signed-in user badge (`name/email`, active store, Sign Out) visible in the top bar
+- [x] **Account Deletion & Store Reset:** Owner-confirmed (`Type DELETE`) permanent account & store deletion for clean restart
 - [x] `business_members` multi-staff RBAC schema readiness
 
 ---
@@ -44,7 +45,7 @@
 - [x] Browser `MediaRecorder` capture with cross-browser codec negotiation (`webm/opus` → `webm` → `mp4`)
 - [x] **Hardware Noise Cancellation + Acoustic Filtering:** `echoCancellation`, `noiseSuppression`, `autoGainControl` + Web Audio waveform
 - [x] **Background Shop Chatter & Conflict Guard (Intent First):** Isolates owner intent from bystander background speech; if even slightest confusion exists (`has_ambiguity_or_noise_conflict` / low confidence), asks clarification with zero assumptions
-- [x] Browser `SpeechSynthesis` spoken responses (`hi-IN` / `en-IN` voices + mute/replay controls)
+- [x] **Natural Neural Voice (`edge-tts` Indian Neural Voices) + Offline Browser Fallback:** Streams warm, natural Indian English (`en-IN-NeerjaExpressiveNeural`) & Hindi (`hi-IN-SwaraNeural`) speech with instant mute/replay controls
 - [x] **Voice Barge-In / Auto-Stop TTS:** Cue immediately stops speaking whenever the user starts speaking or activates the mic
 - [x] **Modular `STTProvider` Interface:**
   - [x] Default: **Groq Free Tier Whisper (`whisper-large-v3-turbo`)** (zero PC load, preserves Gemini quota)
