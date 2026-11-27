@@ -6,6 +6,7 @@
   html {
     background-color: #F7F8FA;
     color: #0F172A;
+    overscroll-behavior-x: none;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -13,6 +14,7 @@
   body {
     background-color: #F7F8FA;
     color: #0F172A;
+    overscroll-behavior-x: none;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 }
@@ -154,6 +156,36 @@
 
 .animate-page-enter {
   animation: pageEnter 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes tabSlideFromRight {
+  from {
+    opacity: 0.45;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes tabSlideFromLeft {
+  from {
+    opacity: 0.45;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-tab-from-right {
+  animation: tabSlideFromRight 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-tab-from-left {
+  animation: tabSlideFromLeft 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .animate-panel-expand {

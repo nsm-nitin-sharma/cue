@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   CalendarDays,
   Wifi,
@@ -15,6 +15,8 @@ import {
   AlertTriangle,
   Crown,
   ChevronDown,
+  ArrowLeft,
+  ArrowRight,
   LogIn,
   LogOut,
   Mic,
@@ -37,8 +39,26 @@ const NAV_TABS = [
   { href: "/reports", label: "Reports" },
 ];
 
+let pendingTabDirection: "next" | "prev" | "none" = "none";
+
+function isTargetHorizontallyScrollable(target: EventTarget | null, deltaX: number): boolean {
+  let el = target as HTMLElement | null;
+  while (el && el !== document.body) {
+    if (el.scrollWidth > el.clientWidth + 2) {
+      const style = window.getComputedStyle(el);
+      if (style.overflowX === "auto" || style.overflowX === "scroll") {
+        if (deltaX > 0 && el.scrollLeft + el.clientWidth < el.scrollWidth - 2) return true;
+        if (deltaX < 0 && el.scrollLeft > 2) return true;
+      }
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -46,6 +66,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [deleteText, setDeleteText] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [swipeCue, setSwipeCue] = useState<{ dir: "next" | "prev"; label: string } | null>(null);
+  const [slideAnim] = useState<"next" | "prev" | "none">(() => {
+    const dir = pendingTabDirection;
+    pendingTabDirection = "none";
+    return dir;
+  });
 
   const {
     store,
@@ -76,6 +102,137 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     deleteAccount,
     enableDemoPreview,
   } = useCueWorkspace();
+
+  const swipeCooldownUntilRef = useRef<number>(0);
+  const wheelAccRef = useRef<{ x: number; y: number; timer: number | null }>({ x: 0, y: 0, timer: null });
+  const touchTwoRef = useRef<{ x0: number; y0: number; active: boolean }>({ x0: 0, y0: 0, active: false });
+
+  const currentTabIdx = NAV_TABS.findIndex((t) => t.href === pathname);
+
+  const navigateBySwipe = useCallback(
+    (dir: "next" | "prev") => {
+      if (currentTabIdx === -1) return;
+      const targetIdx = dir === "next" ? currentTabIdx + 1 : currentTabIdx - 1;
+      if (targetIdx < 0 || targetIdx >= NAV_TABS.length) return;
+      pendingTabDirection = dir;
+      swipeCooldownUntilRef.current = Date.now() + 620;
+      setSwipeCue({ dir, label: NAV_TABS[targetIdx].label });
+      router.push(NAV_TABS[targetIdx].href);
+    },
+    [currentTabIdx, router]
+  );
+
+  useEffect(() => {
+    if (currentTabIdx === -1) return;
+    if (currentTabIdx > 0) router.prefetch(NAV_TABS[currentTabIdx - 1].href);
+    if (currentTabIdx < NAV_TABS.length - 1) router.prefetch(NAV_TABS[currentTabIdx + 1].href);
+  }, [currentTabIdx, router]);
+
+  useEffect(() => {
+    const modalOrInputBusy = (target: EventTarget | null) => {
+      if (historyOpen || registerOpen || accountMenuOpen || confirmDeleteOpen || newProductDraft || pendingConfirmation) {
+        return true;
+      }
+      const el = target as HTMLElement | null;
+      const tag = el?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (currentTabIdx === -1 || e.ctrlKey) return;
+      if (Date.now() < swipeCooldownUntilRef.current) return;
+      if (modalOrInputBusy(e.target)) return;
+      if (Math.abs(e.deltaX) < 1 && Math.abs(e.deltaY) < 1) return;
+      if (isTargetHorizontallyScrollable(e.target, e.deltaX)) return;
+
+      const acc = wheelAccRef.current;
+      acc.x += e.deltaX;
+      acc.y += e.deltaY;
+      if (acc.timer) window.clearTimeout(acc.timer);
+      acc.timer = window.setTimeout(() => {
+        acc.x = 0;
+        acc.y = 0;
+        setSwipeCue(null);
+      }, 190);
+
+      if (Math.abs(acc.x) > 28 && Math.abs(acc.x) > Math.abs(acc.y) * 1.45) {
+        const dir: "next" | "prev" = acc.x > 0 ? "next" : "prev";
+        const candidateIdx = dir === "next" ? currentTabIdx + 1 : currentTabIdx - 1;
+        if (candidateIdx >= 0 && candidateIdx < NAV_TABS.length) {
+          setSwipeCue({ dir, label: NAV_TABS[candidateIdx].label });
+        }
+      }
+
+      if (Math.abs(acc.x) >= 78 && Math.abs(acc.x) > Math.abs(acc.y) * 1.5) {
+        const dir: "next" | "prev" = acc.x > 0 ? "next" : "prev";
+        acc.x = 0;
+        acc.y = 0;
+        navigateBySwipe(dir);
+      }
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (currentTabIdx === -1 || e.touches.length !== 2) {
+        touchTwoRef.current.active = false;
+        return;
+      }
+      if (modalOrInputBusy(e.target)) return;
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      touchTwoRef.current = {
+        x0: (t0.clientX + t1.clientX) / 2,
+        y0: (t0.clientY + t1.clientY) / 2,
+        active: true,
+      };
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!touchTwoRef.current.active || e.touches.length !== 2) return;
+      if (Date.now() < swipeCooldownUntilRef.current) return;
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const dx = (t0.clientX + t1.clientX) / 2 - touchTwoRef.current.x0;
+      const dy = (t0.clientY + t1.clientY) / 2 - touchTwoRef.current.y0;
+      if (Math.abs(dx) > 24 && Math.abs(dx) > Math.abs(dy) * 1.35) {
+        const dir: "next" | "prev" = dx < 0 ? "next" : "prev";
+        const candidateIdx = dir === "next" ? currentTabIdx + 1 : currentTabIdx - 1;
+        if (candidateIdx >= 0 && candidateIdx < NAV_TABS.length) {
+          setSwipeCue({ dir, label: NAV_TABS[candidateIdx].label });
+        }
+      }
+      if (Math.abs(dx) >= 68 && Math.abs(dx) > Math.abs(dy) * 1.45) {
+        touchTwoRef.current.active = false;
+        navigateBySwipe(dx < 0 ? "next" : "prev");
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        touchTwoRef.current.active = false;
+        window.setTimeout(() => setSwipeCue(null), 120);
+      }
+    };
+
+    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [
+    accountMenuOpen,
+    confirmDeleteOpen,
+    currentTabIdx,
+    historyOpen,
+    navigateBySwipe,
+    newProductDraft,
+    pendingConfirmation,
+    registerOpen,
+  ]);
 
   const tierLabel =
     store.tier === "free" ? "Free" : store.tier === "growth" ? "Growth" : "Pro";
@@ -335,9 +492,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </button>
       </div>
 
-      {/* Main Stage with minimal premium route transition */}
-      <main className="flex-1 flex flex-col min-h-0">
-        <div key={pathname} className="flex-1 flex flex-col min-h-0 animate-page-enter">
+      {/* Main Stage with minimal premium route & swipe transitions */}
+      <main className="relative flex-1 flex flex-col min-h-0">
+        {swipeCue && (
+          <div className="pointer-events-none fixed top-16 left-1/2 -translate-x-1/2 z-40 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink/90 text-paper-elevated text-xs font-medium shadow-dock animate-panel-expand">
+            {swipeCue.dir === "prev" && <ArrowLeft className="w-3.5 h-3.5 text-vermilion" />}
+            <span>{swipeCue.label}</span>
+            {swipeCue.dir === "next" && <ArrowRight className="w-3.5 h-3.5 text-vermilion" />}
+          </div>
+        )}
+        <div
+          key={pathname}
+          className={`flex-1 flex flex-col min-h-0 ${
+            slideAnim === "next"
+              ? "animate-tab-from-right"
+              : slideAnim === "prev"
+                ? "animate-tab-from-left"
+                : "animate-page-enter"
+          }`}
+        >
           {children}
         </div>
       </main>

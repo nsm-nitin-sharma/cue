@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Keyboard, ListChecks, ArrowUp, X, Loader2 } from "lucide-react";
+import { Mic, Keyboard, ArrowUp, X, Loader2 } from "lucide-react";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { StatusPill } from "@/components/ui/LedgerPrimitives";
 import { stopSpeaking } from "@/lib/tts";
@@ -27,54 +27,6 @@ interface SpeechRecognitionInstanceLike {
   stop: () => void;
 }
 
-const SAMPLE_FLOWS: { title: string; subtitle: string; text: string }[] = [
-  {
-    title: "5 Coke zyada aa gayi",
-    subtitle: "Triggers 'Do you mean Coca-Cola?' + alias learning + purchase price prompt",
-    text: "Kal Coke ki delivery ho gayi thi, hamare paas 5 Coke zyada aa gayi hain",
-  },
-  {
-    title: "20 Pepsi bottles aayi",
-    subtitle: "Disambiguates 500ml vs 2L before modifying stock",
-    text: "Aaj supplier se 20 Pepsi bottles aayi hain",
-  },
-  {
-    title: "Unmein se 3 damaged hain",
-    subtitle: "Contextual follow-up remembering last Pepsi batch (+17 net)",
-    text: "Unmein se 3 damaged hain",
-  },
-  {
-    title: "5 Nescafe Gold jars aaye",
-    subtitle: "Unlisted item → voice confirmation + New Product Pop-up",
-    text: "5 Nescafe Gold jars aaye hain",
-  },
-  {
-    title: "10 Maggi bik gayi → Actually 7 the",
-    subtitle: "Speak first, then say 'Actually 7 the' for audited reversal",
-    text: "10 Maggi bik gayi",
-  },
-  {
-    title: "Ramesh ko ₹6,500 udhaar diya",
-    subtitle: "Duplicate customer disambiguation + ≥ ₹5,000 security gate",
-    text: "Ramesh ko 6500 ka udhaar diya",
-  },
-  {
-    title: "Kal jo Pepsi aayi thi, wo expired thi",
-    subtitle: "30-day memory retrieves yesterday's Pepsi delivery",
-    text: "Kal jo Pepsi aayi thi, wo expired thi",
-  },
-  {
-    title: "Do mahine pehle kya hua tha?",
-    subtitle: "Verifies > 30 days conversational memory boundary guard",
-    text: "Do mahine pehle kya hua tha?",
-  },
-  {
-    title: "Saara data delete kar do",
-    subtitle: "Verifies SecurityPolicyEngine destructive command block",
-    text: "Saara data delete kar do",
-  },
-];
-
 export function LivingAcousticOrb() {
   const {
     language,
@@ -93,7 +45,6 @@ export function LivingAcousticOrb() {
   const [audioEnergy, setAudioEnergy] = useState(0);
   const [freqBars, setFreqBars] = useState<number[]>([0.2, 0.35, 0.5, 0.35, 0.2]);
   const [showTypeBar, setShowTypeBar] = useState(false);
-  const [showSamples, setShowSamples] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [micError, setMicError] = useState<string | null>(null);
 
@@ -193,7 +144,6 @@ export function LivingAcousticOrb() {
     stopSpeaking();
     discardOnStopRef.current = false;
     setMicError(null);
-    setShowSamples(false);
     setLiveTranscript("");
     liveTranscriptRef.current = "";
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -311,9 +261,21 @@ export function LivingAcousticOrb() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = document.activeElement?.tagName;
-      if (e.key === "Escape" && isRecording) {
+      if (e.key === "Escape") {
+        if (isRecording) {
+          e.preventDefault();
+          cancelRecording();
+          return;
+        }
+        if (showTypeBar) {
+          e.preventDefault();
+          setShowTypeBar(false);
+          return;
+        }
+      }
+      if (e.key === "/" && !isRecording && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
         e.preventDefault();
-        cancelRecording();
+        setShowTypeBar(true);
         return;
       }
       if (
@@ -328,7 +290,7 @@ export function LivingAcousticOrb() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [cancelRecording, isProcessing, isRecording, startRecording, stopRecording]);
+  }, [cancelRecording, isProcessing, isRecording, showTypeBar, startRecording, stopRecording]);
 
   const handleTextSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -377,41 +339,7 @@ export function LivingAcousticOrb() {
         </div>
       )}
 
-      {/* Optional Sample Scenarios Popover */}
-      {showSamples && (
-        <div className="mb-4 w-full max-w-lg bg-paper-elevated border border-rule-strong rounded-xl shadow-dock p-4 animate-slip-in">
-          <div className="flex items-center justify-between mb-3 px-1">
-            <span className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">
-              Verification Scenarios
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowSamples(false)}
-              className="p-1 rounded-md text-ink-muted hover:text-ink"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
-            {SAMPLE_FLOWS.map((s) => (
-              <button
-                key={s.title}
-                type="button"
-                onClick={() => {
-                  setShowSamples(false);
-                  submitCommand(s.text);
-                }}
-                className="w-full text-left px-3 py-2.5 rounded-lg bg-paper hover:bg-vermilion-soft/60 border border-rule hover:border-vermilion/35 transition-colors"
-              >
-                <p className="text-xs font-semibold text-ink">{s.title}</p>
-                <p className="text-[11px] text-ink-muted mt-0.5">{s.subtitle}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Optional Command Input Bar */}
+      {/* Prominent Command Input Bar */}
       {showTypeBar && (
         <form
           onSubmit={handleTextSubmit}
@@ -520,25 +448,45 @@ export function LivingAcousticOrb() {
           </button>
         </div>
 
-        {/* Cancel Recording Pill while actively speaking */}
-        <button
-          type="button"
-          onClick={cancelRecording}
-          aria-label="Cancel voice recording"
-          aria-hidden={!isRecording}
-          className={`absolute left-[calc(50%+54px)] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink-secondary hover:text-crimson hover:border-crimson/40 shadow-slip transition-all duration-200 ${
-            isRecording
-              ? "opacity-100 translate-x-0 pointer-events-auto"
-              : "opacity-0 -translate-x-2 pointer-events-none"
-          }`}
-        >
-          <X className="w-3.5 h-3.5" />
-          <span>Cancel</span>
-        </button>
+        {/* Tactile Type Command Pill (when idle) / Cancel Pill (while speaking) */}
+        {isRecording ? (
+          <button
+            type="button"
+            onClick={cancelRecording}
+            aria-label="Cancel voice recording"
+            className="absolute left-[calc(50%+54px)] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink-secondary hover:text-crimson hover:border-crimson/40 shadow-slip transition-all duration-200 animate-panel-expand active:scale-95"
+          >
+            <X className="w-3.5 h-3.5" />
+            <span>Cancel</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowTypeBar((v) => !v)}
+            aria-label="Type command"
+            aria-expanded={showTypeBar}
+            title="Type a command (Press /)"
+            className={`absolute left-[calc(50%+54px)] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium border shadow-slip transition-all duration-200 active:scale-95 ${
+              showTypeBar
+                ? "bg-ink text-paper-elevated border-ink hover:bg-ink/90"
+                : "bg-paper-elevated border-rule-strong text-ink hover:border-ink hover:bg-white"
+            }`}
+          >
+            <Keyboard className="w-3.5 h-3.5 shrink-0" />
+            <span>Type</span>
+            <span
+              className={`hidden sm:inline font-mono text-[10px] px-1 py-0.2 rounded ${
+                showTypeBar ? "bg-white/15 text-white/80" : "bg-paper-subtle text-ink-muted"
+              }`}
+            >
+              /
+            </span>
+          </button>
+        )}
       </div>
 
-      {/* Institutional Status & Quiet Actions */}
-      <div className="mt-3 flex flex-col items-center gap-2">
+      {/* Institutional Status & Clean Keyboard Hints */}
+      <div className="mt-3 flex flex-col items-center gap-1.5">
         <div className="flex items-center gap-2">
           <StatusPill tone={phaseTone} dot={voicePhase === "listening" || isProcessing}>
             {isRecording
@@ -552,33 +500,9 @@ export function LivingAcousticOrb() {
           {micError && <span className="text-[11px] text-crimson">{micError}</span>}
         </div>
 
-        <div className="flex items-center gap-3.5 text-[11px] text-ink-muted">
-          <span className="hidden sm:inline font-mono">Space · Speak</span>
-          <span className="hidden sm:inline text-rule-strong">·</span>
-          <button
-            type="button"
-            onClick={() => {
-              setShowTypeBar((v) => !v);
-              setShowSamples(false);
-            }}
-            className="inline-flex items-center gap-1 hover:text-ink transition-colors"
-          >
-            <Keyboard className="w-3.5 h-3.5" />
-            Type command
-          </button>
-          <span className="text-rule-strong">·</span>
-          <button
-            type="button"
-            onClick={() => {
-              setShowSamples((v) => !v);
-              setShowTypeBar(false);
-            }}
-            className="inline-flex items-center gap-1 hover:text-vermilion transition-colors"
-          >
-            <ListChecks className="w-3.5 h-3.5 text-ink-secondary" />
-            Test scenarios
-          </button>
-        </div>
+        <p className="hidden sm:block text-[11px] font-mono text-ink-muted">
+          Space · Speak &nbsp;·&nbsp; / · Type &nbsp;·&nbsp; Two-finger swipe · Switch tabs
+        </p>
       </div>
     </div>
   );
