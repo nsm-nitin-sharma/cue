@@ -65,6 +65,17 @@ def _normalize_units(norm: str) -> str:
     return s
 
 
+def _extract_size_tokens(norm_u: str) -> set[str]:
+    return set(re.findall(r"\b\d+(?:\.\d+)?(?:g|kg|ml|l)\b", norm_u))
+
+
+def _sizes_conflict(q_sizes: set[str], p_norm_u: str) -> bool:
+    if not q_sizes:
+        return False
+    p_sizes = _extract_size_tokens(p_norm_u)
+    return bool(p_sizes and not (q_sizes & p_sizes))
+
+
 def _strip_packaging(norm: str) -> str:
     tokens = [
         tok
@@ -124,13 +135,17 @@ def resolve_product(
                 return ProductResolution(status="exact", product=target, spoken_term=query)
 
     # 3. Token / variant containment (e.g., "pepsi" or "coke" matching multiple variants)
-    core_q = _strip_packaging(_normalize_units(norm_q))
+    norm_u = _normalize_units(norm_q)
+    q_sizes = _extract_size_tokens(norm_u)
+    core_q = _strip_packaging(norm_u)
     hinted_q = " ".join(_SYNONYM_HINTS.get(tok, tok) for tok in core_q.split())
     q_tokens = {tok for tok in core_q.split() if len(tok) >= 4}
     h_tokens = {tok for tok in hinted_q.split() if len(tok) >= 4}
     variant_matches: list[dict[str, Any]] = []
     for p in products:
         p_norm = _normalize_units(normalize_text(p["name"]))
+        if _sizes_conflict(q_sizes, p_norm):
+            continue
         core_p = _strip_packaging(p_norm)
         if (
             core_q in core_p
@@ -155,10 +170,12 @@ def resolve_product(
 
     # 4. Single fuzzy / phonetic match -> auto-resolve if ultra-high confidence (>= 88, e.g. "maggie masala" -> "Maggi Masala 70g"),
     #    otherwise ask "Do you mean ...?" (e.g. "coke" -> "Coca-Cola 750ml")
-    hinted_q = " ".join(_SYNONYM_HINTS.get(tok, tok) for tok in core_q.split())
     scored: list[tuple[float, dict[str, Any]]] = []
     for p in products:
-        core_p = _strip_packaging(normalize_text(p["name"]))
+        p_norm = _normalize_units(normalize_text(p["name"]))
+        if _sizes_conflict(q_sizes, p_norm):
+            continue
+        core_p = _strip_packaging(p_norm)
         s1 = fuzz.WRatio(core_q, core_p)
         s2 = fuzz.WRatio(hinted_q, core_p)
         best = max(s1, s2)
@@ -167,12 +184,16 @@ def resolve_product(
             scored.append((best, p))
 
     for al in aliases:
-        core_al = _strip_packaging(normalize_text(al["alias_text"]))
+        core_al = _strip_packaging(_normalize_units(normalize_text(al["alias_text"])))
         s = max(fuzz.WRatio(core_q, core_al), fuzz.WRatio(hinted_q, core_al))
         if s >= 78:
             target = prod_by_id.get(str(al["product_id"]))
-            if target and not any(str(x[1]["id"]) == str(target["id"]) for x in scored):
-                scored.append((s, target))
+            if target:
+                t_norm = _normalize_units(normalize_text(target["name"]))
+                if _sizes_conflict(q_sizes, t_norm):
+                    continue
+                if not any(str(x[1]["id"]) == str(target["id"]) for x in scored):
+                    scored.append((s, target))
 
     scored.sort(key=lambda item: item[0], reverse=True)
     if len(scored) >= 2 and (scored[0][0] - scored[1][0]) < 12:

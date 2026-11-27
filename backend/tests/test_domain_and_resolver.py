@@ -199,3 +199,6 @@ def test_expenses_and_stock_query_parsing():
     assert {c["name"] for c in maggi_multi.candidates} == {"Maggi Masala 70g", "Maggi Masala 100g"}
     picked = resolve_short_variant_reply("Maggi masala 70 gram", maggi_multi.candidates)
     assert picked is not None and picked["name"] == "Maggi Masala 70g"
+
+    # Different explicit weight/size (250g vs 70g) MUST NOT match 70g!
+    assert resolve_product("Maggi masala 250 gram", PRODUCTS, ALIASES).status == "not_found"

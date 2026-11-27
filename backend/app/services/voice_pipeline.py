@@ -276,13 +276,32 @@ class VoicePipelineService:
                 proposal.clarification_question
                 or "Mujhe thoda confusion hai (background awaaz ya unclear intent ke kaaran). Kripya dubara confirm karein ki aap kya record karna chahte hain?"
             )
+            if proposal.operations:
+                context_state["pending_flow"] = {
+                    "type": "confirm_proposed_ops",
+                    "operations": [op.model_dump() for op in proposal.operations],
+                    "prompt": clar_msg,
+                }
             res = VoiceTurnResult(
                 operation_id=operation_id,
                 status="needs_clarification",
                 transcript=clean_text,
                 reply=clar_msg,
                 language=proposal.detected_language,
-                clarification={"kind": "missing_slot", "prompt": clar_msg},
+                clarification={
+                    "kind": "missing_slot",
+                    "prompt": clar_msg,
+                    **(
+                        {
+                            "candidates": [
+                                {"id": "yes", "label": "Yes, confirm", "value": "Yes"},
+                                {"id": "no", "label": "No, cancel", "value": "No"},
+                            ]
+                        }
+                        if proposal.operations
+                        else {}
+                    ),
+                },
             )
             self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, clean_text, proposal.detected_language, stt_provider, stt_confidence, proposal.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
             return res
@@ -328,6 +347,43 @@ class VoicePipelineService:
     ) -> VoiceTurnResult | None:
         flow_type = pending_flow.get("type")
         lower = reply_text.lower().strip()
+
+        if flow_type == "confirm_proposed_ops":
+            if any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "bilkul", "confirm", "ok", "theek")):
+                ops = [VoiceOperationItem.model_validate(item) for item in pending_flow.get("operations", [])]
+                context_state.pop("pending_flow", None)
+                if ops:
+                    _, aliases, _ = self._load_catalog(business_id)
+                    return await self._execute_operations_batch(
+                        operations=ops,
+                        business_id=business_id,
+                        user_id=user_id,
+                        conv_id=conv_id,
+                        today_str=today_str,
+                        tz_name=tz_name,
+                        operation_id=operation_id,
+                        payload_hash=payload_hash,
+                        raw_transcript=reply_text,
+                        language=language,
+                        stt_provider=stt_provider,
+                        stt_confidence=stt_confidence,
+                        products=products,
+                        aliases=aliases,
+                        customers=customers,
+                        context_state=context_state,
+                    )
+            if any(lower.startswith(w) for w in ("no", "nahi", "na ", "cancel", "mat", "galat")):
+                context_state.pop("pending_flow", None)
+                msg = "Theek hai, cancel kar diya gaya. Kripya batayein ab kya karna hai."
+                res = VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="needs_clarification",
+                    transcript=reply_text,
+                    reply=msg,
+                    language=language,  # type: ignore[arg-type]
+                )
+                self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, reply_text, language, stt_provider, stt_confidence, pending_flow, "needs_clarification", "tier2", [], res, context_state, user_id)
+                return res
 
         if flow_type == "verify_alias":
             if any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "bilkul", "correct", "ok")):
