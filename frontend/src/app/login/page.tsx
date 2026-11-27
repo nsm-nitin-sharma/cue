@@ -1,18 +1,49 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, ShieldCheck, Mail, Lock } from "lucide-react";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { fetchWorkspaceBootstrap } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
+  const [checkingSession, setCheckingSession] = useState(true);
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ tone: "sage" | "crimson"; text: string } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function checkExistingSession() {
+      if (!supabase || !isSupabaseConfigured) {
+        if (active) setCheckingSession(false);
+        return;
+      }
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data.session) {
+          try {
+            await fetchWorkspaceBootstrap();
+            router.replace("/");
+          } catch {
+            router.replace("/onboarding");
+          }
+          return;
+        }
+      } catch {
+        // Not signed in
+      }
+      if (active) setCheckingSession(false);
+    }
+    checkExistingSession();
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,7 +64,12 @@ export default function LoginPage() {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        router.push("/onboarding");
+        try {
+          await fetchWorkspaceBootstrap();
+          router.replace("/");
+        } catch {
+          router.replace("/onboarding");
+        }
       }
     } catch (err) {
       setMessage({
@@ -68,6 +104,14 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen bg-paper flex items-center justify-center text-xs font-mono text-ink-muted">
+        Checking session...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-paper flex flex-col justify-between p-6 sm:p-10">
