@@ -125,6 +125,13 @@ def resolve_product(
         if core_q in core_p or any(tok in core_p.split() for tok in q_tokens):
             variant_matches.append(p)
 
+    if len(variant_matches) == 1:
+        return ProductResolution(
+            status="exact",
+            product=variant_matches[0],
+            spoken_term=query,
+        )
+
     if len(variant_matches) > 1:
         return ProductResolution(
             status="ambiguous",
@@ -132,7 +139,8 @@ def resolve_product(
             spoken_term=query,
         )
 
-    # 4. Single fuzzy / phonetic match -> ALWAYS ask "Do you mean ...?" instead of guessing
+    # 4. Single fuzzy / phonetic match -> auto-resolve if ultra-high confidence (>= 88, e.g. "maggie masala" -> "Maggi Masala 70g"),
+    #    otherwise ask "Do you mean ...?" (e.g. "coke" -> "Coca-Cola 750ml")
     hinted_q = " ".join(_SYNONYM_HINTS.get(tok, tok) for tok in core_q.split())
     scored: list[tuple[float, dict[str, Any]]] = []
     for p in products:
@@ -160,6 +168,12 @@ def resolve_product(
             spoken_term=query,
         )
     if len(scored) >= 1:
+        if scored[0][0] >= 88 and hinted_q == core_q:
+            return ProductResolution(
+                status="exact",
+                product=scored[0][1],
+                spoken_term=query,
+            )
         return ProductResolution(
             status="verify_alias",
             product=scored[0][1],

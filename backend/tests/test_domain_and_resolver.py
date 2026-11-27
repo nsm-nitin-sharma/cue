@@ -178,3 +178,7 @@ def test_expenses_and_stock_query_parsing():
     assert len(corr_prop.operations) == 1
     assert corr_prop.operations[0].intent == "correct_last_operation"
     assert corr_prop.operations[0].payment_method == "upi"
+
+    # Single-variant catalog items resolve directly even without size suffix or minor spelling variance
+    assert resolve_product("Coca-Cola", PRODUCTS, ALIASES).status == "exact"
+    assert resolve_product("Maggie Masala", PRODUCTS, ALIASES).status == "exact"

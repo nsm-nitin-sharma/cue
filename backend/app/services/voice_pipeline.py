@@ -1056,7 +1056,18 @@ class VoicePipelineService:
                             "candidate_id": str(pres.product["id"]),
                             "draft": draft,
                         }
-                        msg = f"Do you mean {pres.product['name']}?"
+                        qty_disp = f"{float(op.quantity or 1):g}"
+                        unit_disp = pres.product.get("base_unit", "piece")
+                        action_disp = (
+                            "sold"
+                            if op.intent == "record_sale"
+                            else (
+                                "received (stock add)"
+                                if op.intent == "inventory_receive"
+                                else ("expired" if op.intent == "inventory_expiry" else "damaged")
+                            )
+                        )
+                        msg = f"Do you mean {qty_disp} {unit_disp} {pres.product['name']} {action_disp}?"
                         res = VoiceTurnResult(
                             operation_id=operation_id,
                             status="needs_clarification",
