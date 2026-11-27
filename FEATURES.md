@@ -9,7 +9,7 @@
 
 - [x] Initialize Git repository on `main` with strict secret-blocking `.gitignore`
 - [x] Author enterprise implementation blueprint ([IMPLEMENTATION_PLAN.md](file:///c:/Users/nitin/OneDrive/Documents/cue/IMPLEMENTATION_PLAN.md))
-- [ ] Connect GitHub remote & push milestone commits (zero secrets ever committed)
+- [x] Connect GitHub remote & push milestone commits (zero secrets ever committed)
 - [ ] Verify Supabase JWT (`auth.uid()`) on every API route; never trust client/LLM-supplied `user_id` or `business_id`
 - [ ] Enforce Supabase Row Level Security (RLS) across all business tables
 - [ ] **AI-as-Untrusted-Parser Sandboxing:** LLM has zero DB, SQL, shell, or task-execution authority; outputs strict JSON only
@@ -67,6 +67,13 @@
 - [ ] **Brand-New Product / Customer Creation (Voice + Pop-Up):**
   - [ ] Cue asks *"Kya naya product add karun?"* AND displays an interactive confirmation pop-up on screen
   - [ ] Confirming via **either voice or screen button** closes the pop-up, creates the item, and commits the transaction atomically
+- [ ] **Schema-Driven Multi-Turn Slot-Filling (Required Field Prompting Across All Intents):**
+  - [ ] Holds partial draft in `pending_slot_fill` without committing incomplete records whenever required business/DB fields are missing
+  - [ ] Stock Receive (`inventory_receive`): asks purchase/cost price if not provided (e.g., *"5 Coca-Cola kis rate par kharidi?"*)
+  - [ ] Sales (`record_sale`): asks missing selling price, payment type (`cash`/`credit`/`partial`), or customer name for udhaar
+  - [ ] Expenses (`record_expense`): asks missing amount, category, or payment method (`cash`/`upi`/`bank`)
+  - [ ] Customer Payments (`record_customer_payment`): asks missing customer, amount, or payment method
+  - [ ] New Product (`create_product`): collects `name`, `base_unit`, `cost_price`, `selling_price` via voice or pop-up fields before saving
 - [ ] Hinglish/Hindi number & fraction parser (`pav = 0.25`, `aadha = 0.5`, `dedh = 1.5`, `dhai = 2.5`, `darjan = 12`)
 - [ ] Unit normalization (`piece/nag/bottle`, `packet/pkt`, `kg/kilo`, `litre/L`, `box/peti`) & `product_unit_conversions` (`500g → 0.5 kg`, `1 peti → 24 pcs`, incompatible unit rejection)
 
