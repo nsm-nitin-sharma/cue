@@ -1,4 +1,5 @@
 from datetime import timedelta
+import re
 from typing import Any
 import uuid
 
@@ -348,6 +349,28 @@ class VoicePipelineService:
         flow_type = pending_flow.get("type")
         lower = reply_text.lower().strip()
 
+        # If user abandons pending clarification with a brand-new command (e.g. "2 packets of Maggi masala 70 gram sold"),
+        # clear pending_flow and let the main pipeline execute the new command cleanly.
+        new_cmd_pattern = re.compile(
+            r"\b(sold|bik|biki|bika|bech|bechi|aayi|aaya|receive|add|expense|kharcha|udhaar|khata|paid|payment|damaged|expired|inventory|stock|cancel|chhodo|hatao)\b",
+            re.IGNORECASE,
+        )
+        is_short_confirm = any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "ok", "same", "free"))
+        if not is_short_confirm and new_cmd_pattern.search(lower):
+            context_state.pop("pending_flow", None)
+            if re.search(r"\b(cancel|chhodo|hatao)\b", lower):
+                msg = "Theek hai, pichla step cancel kar diya gaya."
+                res = VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="executed",
+                    transcript=reply_text,
+                    reply=msg,
+                    language=language,  # type: ignore[arg-type]
+                )
+                self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, reply_text, language, stt_provider, stt_confidence, pending_flow, "executed", "tier2", [], res, context_state, user_id)
+                return res
+            return None
+
         if flow_type == "confirm_proposed_ops":
             if any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "bilkul", "confirm", "ok", "theek")):
                 ops = [VoiceOperationItem.model_validate(item) for item in pending_flow.get("operations", [])]
@@ -491,7 +514,13 @@ class VoicePipelineService:
                 )
 
         if flow_type == "missing_slot":
-            val = parse_indian_number(reply_text)
+            cleaned_slot_text = re.sub(
+                r"\b\d+(?:\.\d+)?\s*(?:g|gm|gram|grams|kg|kilo|ml|l|litre|liter)\b",
+                " ",
+                reply_text,
+                flags=re.IGNORECASE,
+            )
+            val = parse_indian_number(cleaned_slot_text)
             draft = dict(pending_flow["draft"])
             missing_field = pending_flow.get("missing_field")
             prod = next((p for p in products if str(p["id"]) == str(draft.get("product_id"))), None)
