@@ -318,7 +318,7 @@ export function LivingAcousticOrb() {
     <div className="relative z-20 pb-5 pt-6 px-4 flex flex-col items-center bg-gradient-to-t from-paper via-paper/95 to-transparent backdrop-blur-[2px]">
       {/* Live Speech Caption + Dynamic Equalizer */}
       {isRecording && (
-        <div className="mb-4 max-w-xl text-center bg-paper-elevated/95 border border-rule-strong rounded-2xl px-5 py-3 shadow-dock animate-slip-in">
+        <div className="mb-6 max-w-xl text-center bg-paper-elevated/95 border border-rule-strong rounded-2xl px-5 py-3 shadow-dock animate-slip-in">
           <div className="flex items-center justify-center gap-2 mb-1.5">
             <span className="flex items-end gap-0.5 h-3">
               {freqBars.map((b, i) => (
@@ -468,7 +468,7 @@ export function LivingAcousticOrb() {
             type="button"
             onClick={cancelRecording}
             aria-label="Cancel voice recording"
-            className="absolute left-[calc(50%+54px)] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink-secondary hover:text-crimson hover:border-crimson/40 shadow-slip transition-all duration-200 animate-panel-expand active:scale-95"
+            className="absolute left-[calc(50%+68px)] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-paper-elevated border border-rule-strong text-ink-secondary hover:text-crimson hover:border-crimson/40 shadow-slip transition-all duration-200 animate-panel-expand active:scale-95"
           >
             <X className="w-3.5 h-3.5" />
             <span>Cancel</span>
@@ -480,7 +480,7 @@ export function LivingAcousticOrb() {
             aria-label="Type command"
             aria-expanded={showTypeBar}
             title="Type command"
-            className={`absolute left-[calc(50%+54px)] w-10 h-10 rounded-full flex items-center justify-center border shadow-slip transition-all duration-200 active:scale-95 ${
+            className={`absolute left-[calc(50%+68px)] w-10 h-10 rounded-full flex items-center justify-center border shadow-slip transition-all duration-200 active:scale-95 ${
               showTypeBar
                 ? "bg-ink text-paper-elevated border-ink hover:bg-ink/90"
                 : "bg-paper-elevated border-rule-strong text-ink hover:border-ink hover:bg-white"

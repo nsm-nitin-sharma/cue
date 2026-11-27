@@ -6,6 +6,7 @@ import uuid
 from app.core.config import get_settings
 from app.core.entitlements import assert_voice_quota
 from app.core.exceptions import InsufficientStockError, PolicyBlockedError
+from app.core.i18n_replies import localize_reply_async, romanize_devanagari_to_hinglish
 from app.core.policy import SecurityPolicyEngine
 from app.core.security import canonical_payload_hash, validate_audio_upload
 from app.core.time_utils import (
@@ -122,20 +123,25 @@ class VoicePipelineService:
         language: str = "hinglish",
     ) -> VoiceTurnResult:
         validate_audio_upload(audio_bytes, content_type)
+        selected_lang = language if language in {"hinglish", "hi", "en"} else "hinglish"
         stt = get_stt_provider()
         stt_res = await stt.transcribe(
             audio_bytes,
             filename=filename,
             content_type=content_type or "audio/webm",
-            language_hint=language,
+            language_hint=selected_lang,
         )
         if stt_res.is_unclear or not stt_res.text:
+            retry_msg = await localize_reply_async(
+                "Awaaz clear nahi thi ya background noise zyada tha. Kripya dobara bolein.",
+                selected_lang,
+            )
             return VoiceTurnResult(
                 operation_id=operation_id,
                 status="retry_audio",
                 transcript="",
-                reply="Awaaz clear nahi thi ya background noise zyada tha. Kripya dobara bolein.",
-                language=language if language in {"hinglish", "hi", "en"} else "hinglish",  # type: ignore[arg-type]
+                reply=retry_msg,
+                language=selected_lang,  # type: ignore[arg-type]
             )
 
         return await self.process_text_turn(
@@ -143,12 +149,54 @@ class VoicePipelineService:
             user_id=user_id,
             text=stt_res.text,
             operation_id=operation_id,
-            language=stt_res.detected_language,
+            language=selected_lang,
             stt_provider=stt_res.provider,
             stt_confidence=stt_res.confidence,
         )
 
     async def process_text_turn(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        text: str,
+        operation_id: str,
+        language: str = "hinglish",
+        stt_provider: str = "text",
+        stt_confidence: float | None = None,
+    ) -> VoiceTurnResult:
+        selected_lang = language if language in {"hinglish", "hi", "en"} else "hinglish"
+        clean_text = text.strip()
+        if selected_lang == "hinglish":
+            clean_text = romanize_devanagari_to_hinglish(clean_text)
+
+        res = await self._process_text_turn_inner(
+            business_id=business_id,
+            user_id=user_id,
+            text=clean_text,
+            operation_id=operation_id,
+            language=selected_lang,
+            stt_provider=stt_provider,
+            stt_confidence=stt_confidence,
+        )
+        res.language = selected_lang  # type: ignore[assignment]
+        if selected_lang in {"en", "hi"} and res.reply:
+            localized = await localize_reply_async(res.reply, selected_lang)
+            if localized and localized != res.reply:
+                res.reply = localized
+                if res.clarification and isinstance(res.clarification, dict) and res.clarification.get("prompt"):
+                    res.clarification["prompt"] = localized
+                try:
+                    self.db.table("conversation_messages").update(
+                        {"content": localized, "language": selected_lang}
+                    ).eq("business_id", business_id).eq("linked_operation_id", operation_id).eq(
+                        "role", "assistant"
+                    ).execute()
+                except Exception:
+                    pass
+        return res
+
+    async def _process_text_turn_inner(
         self,
         *,
         business_id: str,

@@ -2,14 +2,26 @@ import httpx
 
 from app.core.config import get_settings
 from app.core.exceptions import AudioValidationError
+from app.core.i18n_replies import romanize_devanagari_to_hinglish
 from app.providers.stt.base import STTProvider, STTResult
 
-_KIRANA_VOCAB_PROMPT = (
-    "Indian kirana store conversation in Hindi, Hinglish, and English. "
-    "Products: Pepsi, Coca-Cola, Coke, Maggi, Maggie Masala, Tata Salt, Fortune Oil, Amul Milk, Parle-G, Nescafe. "
-    "Terms: bottles, packet, gram, peti, box, kilo, litre, cash, online, GPay, Google Pay, PhonePe, Paytm, "
-    "udhaar, bik gayi, aayi hain, damaged, expired, bijli bill, Ramesh, Sunita, actually, nahi, payment pending."
-)
+_PROMPTS_BY_LANG: dict[str, str] = {
+    "en": (
+        "Indian retail and kirana store conversation in English only. "
+        "Products: Pepsi, Coca-Cola, Coke, Maggie Masala, Chini, Tata Salt, Fortune Oil, Amul Milk, Nescafe Gold, Surf Excel. "
+        "Terms: pieces, packets, kg, gram, litre, box, cash, online, GPay, Google Pay, PhonePe, Paytm, credit, sold, received, damaged, expired."
+    ),
+    "hi": (
+        "भारतीय किराना दुकान की बातचीत शुद्ध हिंदी (देवनागरी) में। "
+        "प्रोडक्ट्स: पेप्सी, कोका-कोला, मैगी मसाला, चीनी, टाटा नमक, अमूल दूध, नेस्कैफे गोल्ड, सर्फ एक्सेल। "
+        "शब्द: पैकेट, पीस, किलो, ग्राम, लीटर, पेटी, कैश, ऑनलाइन, उधार, बिका, आया, खराब, एक्सपायर।"
+    ),
+    "hinglish": (
+        "Romanized Hinglish kirana conversation written strictly in English Latin letters (a-z), NEVER Devanagari script. "
+        "Examples: 'Aaj chini ki kitni sale hui', '2 Maggie Masala 70 gram bik gayi', 'Nitin ko 500 udhaar diya', "
+        "'GPay se ek Coca-Cola li', 'Cash nahi online hua tha', 'Inventory mein kitna stock hai', 'dahi kilo chini aayi'."
+    ),
+}
 
 
 class GroqWhisperProvider(STTProvider):
@@ -33,15 +45,16 @@ class GroqWhisperProvider(STTProvider):
         files = {
             "file": (filename or "recording.webm", audio_bytes, content_type or "audio/webm"),
         }
+        lang_mode = language_hint if language_hint in {"en", "hi", "hinglish"} else "hinglish"
         data = {
             "model": settings.GROQ_WHISPER_MODEL,
             "response_format": "verbose_json",
-            "prompt": _KIRANA_VOCAB_PROMPT,
+            "prompt": _PROMPTS_BY_LANG[lang_mode],
             "temperature": "0",
         }
-        if language_hint == "hi":
+        if lang_mode == "hi":
             data["language"] = "hi"
-        elif language_hint == "en":
+        elif lang_mode == "en":
             data["language"] = "en"
 
         async with httpx.AsyncClient(timeout=25.0) as client:
@@ -57,6 +70,8 @@ class GroqWhisperProvider(STTProvider):
 
         payload = resp.json()
         text = (payload.get("text") or "").strip()
+        if lang_mode == "hinglish" and text:
+            text = romanize_devanagari_to_hinglish(text)
         segments = payload.get("segments") or []
 
         # Guard against pure background noise / silence hallucinations
@@ -67,19 +82,17 @@ class GroqWhisperProvider(STTProvider):
         if not text or len(text) < 2 or avg_no_speech > 0.78:
             return STTResult(
                 text="",
-                detected_language=language_hint,
+                detected_language=lang_mode,
                 confidence=0.1,
                 provider="groq_whisper",
                 is_unclear=True,
             )
 
-        detected_lang = payload.get("language") or language_hint
-        norm_lang = "hi" if detected_lang.startswith("hi") else ("en" if detected_lang == "en" else "hinglish")
         confidence = max(0.05, min(0.99, 1.0 - avg_no_speech))
 
         return STTResult(
             text=text,
-            detected_language=norm_lang,
+            detected_language=lang_mode,
             confidence=round(confidence, 3),
             provider="groq_whisper",
             is_unclear=False,

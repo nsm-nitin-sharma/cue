@@ -586,3 +586,27 @@ def test_item_specific_sales_query_and_quantity_correction_revenue():
     coke_res = qe.answer_query(business_id="b1", topic="sales_summary", product_query="Coke", products=prods, aliases=[])
     assert coke_res["amount_inr"] == 350.0
     assert "7 units" in coke_res["reply"] or "7 piece" in coke_res["lines"][0]["value"]
+
+
+def test_hinglish_romanizer_and_english_reply_localization():
+    from app.core.i18n_replies import localize_reply_sync, romanize_devanagari_to_hinglish
+
+    # Devanagari Hinglish STT output converts cleanly into Romanized Hinglish for Hinglish mode
+    rom = romanize_devanagari_to_hinglish("आज चीनी की कितनी सी एल हुई?")
+    assert "aaj" in rom.lower()
+    assert "chini" in rom.lower()
+    assert "sale" in rom.lower()
+
+    mag = romanize_devanagari_to_hinglish("एक मैगी मसाला 70 gram bik gayi")
+    assert "maggie" in mag.lower()
+    assert "70 gram" in mag.lower()
+
+    # English localization converts canonical replies cleanly without changing numbers/names
+    en_sales = localize_reply_sync(
+        "Aaj abhi tak 10 sales hui hain, total ₹1,136 (Collected ₹1,136, Udhaar ₹0).",
+        "en",
+    )
+    assert en_sales == "Today's total so far: 10 sales amounting to ₹1,136 (Collected ₹1,136, Udhaar ₹0)."
+
+    en_item = localize_reply_sync("1 Maggie Masala 70 Gram ki Online sale (₹12) save ho gayi.", "en")
+    assert en_item == "Saved Online sale for 1 Maggie Masala 70 Gram (₹12)."

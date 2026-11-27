@@ -58,6 +58,7 @@
 - [x] **Modular `LLMProvider` Interface:**
   - [x] Primary: **Google Gemini API (Free Tier)** with model fallback & deterministic Hinglish/English fallback parser (`deterministic_fallback_parse`)
   - [x] Optional local adapter: Ollama (disabled by default)
+- [x] **Strict Selected-Language Pipeline (STT + Reply + TTS):** Locking Settings to **English**, **Hindi**, or **Hinglish** enforces matching speech recognition (`Groq Whisper` tailored prompts + deterministic Devanagari→Latin Romanizer `romanize_devanagari_to_hinglish` for Hinglish), strict reply localization (`i18n_replies.py`), and matching neural voice output (`en-IN-NeerjaExpressiveNeural` vs `hi-IN-SwaraNeural`)
 - [x] Hindi, English, and Hinglish code-switching + Indian kirana vocabulary support
 
 ---
