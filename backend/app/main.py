@@ -42,4 +42,12 @@ async def cue_error_handler(request: Request, exc: CueError):
     )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error_code": "INTERNAL_ERROR", "detail": str(exc)},
+    )
+
+
 app.include_router(api_router, prefix=settings.API_PREFIX)

@@ -202,3 +202,14 @@ def test_expenses_and_stock_query_parsing():
 
     # Different explicit weight/size (250g vs 70g) MUST NOT match 70g!
     assert resolve_product("Maggi masala 250 gram", PRODUCTS, ALIASES).status == "not_found"
+
+    # VoiceOperationItem create_product schema supports both cost_price & selling_price cleanly
+    new_item_op = VoiceOperationItem(
+        intent="create_product",
+        product_query="Maggi Masala 250g",
+        quantity=10,
+        unit="packet",
+        cost_price=5.0,
+        selling_price=50.0,
+    )
+    assert new_item_op.cost_price == 5.0 and new_item_op.selling_price == 50.0

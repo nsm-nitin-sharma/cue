@@ -48,6 +48,8 @@ SECURITY & PRECISION RULES:
       "quantity": number | null,
       "unit": string | null,
       "unit_price": number | null,
+      "cost_price": number | null,
+      "selling_price": number | null,
       "total_amount": number | null,
       "paid_amount": number | null,
       "payment_status": "paid" | "partial" | "credit" | null,

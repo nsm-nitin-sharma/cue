@@ -1145,7 +1145,7 @@ class VoicePipelineService:
                     "baseUnit": unit_val,
                     "quantity": op.quantity or 1,
                     "costPrice": str(op.cost_price or op.unit_price or 0),
-                    "sellingPrice": str(op.unit_price or 0),
+                    "sellingPrice": str(op.selling_price or op.unit_price or 0),
                     "lowStockThreshold": "5",
                     "actionKind": "receive",
                 }
@@ -1625,7 +1625,7 @@ class VoicePipelineService:
                         business_id=business_id,
                         product_id=str(p["id"]),
                         cost_price=op.cost_price,
-                        selling_price=op.unit_price,
+                        selling_price=op.selling_price if op.selling_price is not None else op.unit_price,
                         low_stock_threshold=op.low_stock_threshold,
                     )
                     rep = f"{p['name']} ki settings update ho gayi hain."

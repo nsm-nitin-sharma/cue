@@ -39,6 +39,8 @@ class VoiceOperationItem(StrictModel):
     quantity: float | None = Field(default=None, gt=0, le=10000)
     unit: str | None = Field(default=None, max_length=32)
     unit_price: float | None = Field(default=None, ge=0, le=1000000)
+    cost_price: float | None = Field(default=None, ge=0, le=1000000)
+    selling_price: float | None = Field(default=None, ge=0, le=1000000)
     total_amount: float | None = Field(default=None, ge=0, le=1000000)
     paid_amount: float | None = Field(default=None, ge=0, le=1000000)
     payment_status: Literal["paid", "partial", "credit"] | None = None
