@@ -410,7 +410,12 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     listOfflineCommands().then(setOfflineQueue);
     try {
       const savedMascot = window.localStorage.getItem("cue.mascotVariant");
-      if (savedMascot === "fox" || savedMascot === "classic") {
+      if (
+        savedMascot === "fox" ||
+        savedMascot === "owl" ||
+        savedMascot === "axolotl" ||
+        savedMascot === "classic"
+      ) {
         setMascotState(savedMascot);
       }
     } catch {

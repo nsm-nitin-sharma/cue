@@ -28,8 +28,8 @@ import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { formatINR } from "@/lib/format";
 import { StatusPill, ConfirmDrawer } from "@/components/ui/LedgerPrimitives";
 import { NewEntityPopup } from "@/features/voice/NewEntityPopup";
-import { CueMascot } from "@/features/voice/CueMascot";
-import type { LanguageMode, MascotVariant } from "@/types/cue";
+import { CueMascot, MASCOT_CATALOG } from "@/features/voice/CueMascot";
+import type { LanguageMode } from "@/types/cue";
 
 const NAV_TABS = [
   { href: "/", label: "Voice" },
@@ -702,16 +702,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-ink">Cue Mascot</span>
                     <span className="text-[10px] font-mono uppercase tracking-wider text-ink-muted">
-                      {mascot === "fox" ? "Kiko Fox" : "Classic Cue"}
+                      {MASCOT_CATALOG.find((m) => m.id === mascot)?.name ?? "Kiko"}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    {(
-                      [
-                        { id: "fox", name: "Kiko Fox", desc: "Tangerine shop fox" },
-                        { id: "classic", name: "Classic Cue", desc: "Plush buddy" },
-                      ] as { id: MascotVariant; name: string; desc: string }[]
-                    ).map((item) => {
+                    {MASCOT_CATALOG.map((item) => {
                       const active = mascot === item.id;
                       return (
                         <button
@@ -730,7 +725,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-ink truncate">{item.name}</p>
-                            <p className="text-[10px] text-ink-muted truncate">{item.desc}</p>
+                            <p className="text-[10px] text-ink-muted truncate">{item.tagline}</p>
                           </div>
                         </button>
                       );
