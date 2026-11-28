@@ -70,6 +70,14 @@ class _TableQueryBuilder:
         self._params.append((col, f"gte.{val}"))
         return self
 
+    def lt(self, col: str, val: Any) -> "_TableQueryBuilder":
+        self._params.append((col, f"lt.{val}"))
+        return self
+
+    def lte(self, col: str, val: Any) -> "_TableQueryBuilder":
+        self._params.append((col, f"lte.{val}"))
+        return self
+
     def in_(self, col: str, vals: list[Any]) -> "_TableQueryBuilder":
         joined = ",".join(str(v) for v in vals)
         self._params.append((col, f"in.({joined})"))

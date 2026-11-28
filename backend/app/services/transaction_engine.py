@@ -1170,28 +1170,11 @@ class TransactionEngine:
         updated = dict(res.data[0])
         if old_name and new_name and " ".join(old_name.lower().split()) != " ".join(new_name.lower().split()):
             try:
-                old_norm = " ".join(old_name.lower().split())
-                alias_hit = (
-                    self.db.table("product_aliases")
-                    .select("id")
-                    .eq("business_id", business_id)
-                    .eq("alias_normalized", old_norm)
-                    .limit(1)
-                    .execute()
-                    .data
-                    or []
+                self.save_verified_alias(
+                    business_id=business_id,
+                    product_id=product_id,
+                    alias_text=old_name,
                 )
-                if not alias_hit:
-                    self.db.table("product_aliases").insert(
-                        {
-                            "business_id": business_id,
-                            "product_id": product_id,
-                            "alias": old_name,
-                            "alias_normalized": old_norm,
-                            "confidence": 1.0,
-                            "verified": True,
-                        }
-                    ).execute()
             except Exception:
                 pass
         if old_name is not None:

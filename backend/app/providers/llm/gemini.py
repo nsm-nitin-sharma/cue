@@ -219,12 +219,12 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[VoiceOperationItem(intent="query_business", query_topic="daily_summary", date_range=fallback_range)],
         )
 
-    if re.search(r"(kitni sale|kitne sales|aaj ki sale|kal.*biki|is hafte.*sale|is mahine.*sale|today.*sale|sales till now|pending|kitna payment|baki hai)", lower):
+    if re.search(r"(kitni\s+(?:sale|sel)|kitne\s+sales|aaj\s+ki\s+(?:sale|sel)|kal.*biki|is\s+hafte.*(?:sale|sel)|is\s+mahine.*(?:sale|sel)|today.*sale|sales\s+till\s+now|pending|kitna\s+payment|baki\s+hai)", lower):
         topic = "pending_payments" if ("pending" in lower or "payment" in lower or "baki" in lower) else "sales_summary"
         pq_clean: str | None = None
         if topic == "sales_summary":
             pq = re.sub(
-                r"\b(aaj|kal|parso|today|yesterday|is|hafte|mahine|week|month|ki|ke|ka|kitni|kitne|sale|sales|hui|hua|hai|hain|thi|biki|bika|till|now|total|batao|dikhao|how|many|much|sold)\b",
+                r"\b(aaj|kal|parso|today|yesterday|is|hafte|mahine|week|month|ki|ke|ka|kitni|kitne|sale|sales|sel|hui|hua|hai|hain|thi|biki|bika|till|now|total|batao|dikhao|how|many|much|sold)\b",
                 " ",
                 re.sub(r"[?!.,]+", " ", lower),
             )

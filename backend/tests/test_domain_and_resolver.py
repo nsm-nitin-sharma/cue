@@ -672,6 +672,11 @@ def test_damage_correction_parsing_and_ledger_isolation():
             self._payload = payload
             return self
 
+        def upsert(self, payload, on_conflict=None):
+            self._act = "insert"
+            self._payload = payload
+            return self
+
         def eq(self, k, v):
             self._filters.append(("eq", k, v))
             return self
@@ -801,6 +806,11 @@ def test_reverse_operation_updates_inventory_for_direct_and_corrected_sales():
             return self
 
         def insert(self, payload):
+            self._act = "insert"
+            self._payload = payload
+            return self
+
+        def upsert(self, payload, on_conflict=None):
             self._act = "insert"
             self._payload = payload
             return self
@@ -966,6 +976,11 @@ def _make_rich_db(store):
             return self
 
         def insert(self, payload):
+            self._act = "insert"
+            self._payload = payload
+            return self
+
+        def upsert(self, payload, on_conflict=None):
             self._act = "insert"
             self._payload = payload
             return self
@@ -1311,7 +1326,16 @@ def test_supplier_credit_split_sale_and_voice_rename():
     # 3. Product rename auto-saves old name as alias
     upd_p = tx.update_product_settings(business_id="b1", product_id="p1", new_name="Coke 750ml")
     assert upd_p["name"] == "Coke 750ml"
-    assert len(store["product_aliases"]) == 1 and store["product_aliases"][0]["alias"] == "Coca-Cola"
+    assert len(store["product_aliases"]) == 1 and store["product_aliases"][0]["alias_text"] == "Coca-Cola"
+
+    # 4. SupabaseRestClient query builder supports lt/lte/gt/gte cleanly
+    from app.db.supabase_client import SupabaseRestClient
+
+    sb = SupabaseRestClient("https://example.supabase.co", "sb_secret_test")
+    qb = sb.table("sales").select("*").gte("transaction_date", "2026-11-23").lte("transaction_date", "2026-11-28").lt("total_amount", 500)
+    assert ("transaction_date", "gte.2026-11-23") in qb._params
+    assert ("transaction_date", "lte.2026-11-28") in qb._params
+    assert ("total_amount", "lt.500") in qb._params
 
     # 4. Deterministic fallback parser recognizes date range, return, supplier, split & rename
     p_week = deterministic_fallback_parse("Is hafte kitni sale hui?", "hinglish")
