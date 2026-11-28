@@ -92,7 +92,7 @@ def extract_post_negation_number(text: str) -> float | None:
     lower = text.lower()
     num_tok = r"(?:\d+(?:\.\d+)?|" + "|".join(sorted(_WORD_NUMBERS.keys(), key=len, reverse=True)) + r")"
     cleaned = re.sub(rf"\bnot\s+{num_tok}\b", " ", lower)
-    parts = re.split(r"\b(?:nahi|nahin|ki\s+jagah|instead\s+of|balki)\b", cleaned)
+    parts = re.split(r"\b(?:na\s+hii?|nahi|nahin|ki\s+jagah|instead\s+of|balki)\b|नहीं", cleaned)
     if len(parts) > 1:
         after_neg = parts[-1].strip(" ,.!?")
         if after_neg:

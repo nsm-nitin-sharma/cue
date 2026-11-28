@@ -25,18 +25,21 @@ SECURITY & PRECISION RULES:
    - For Khata (Customer Credit) CRUD: use `create_customer`, `update_customer` (rename via `new_name`, update `phone` or `area_note`), `record_udhaar_credit` (direct credit without product), `record_customer_payment`, or `query_business` (`query_topic: "pending_payments"` or `"customer_balance"`).
    - For Supplier Wholesale Khata (Accounts Payable):
      * "Supplier Sharma ji se 5,000 ka maal udhaar aaya" / wholesale credit -> `intent: "record_supplier_credit"`, `customer_query: "Sharma ji"`, `total_amount: 5000`.
+     * DISTRIBUTIVE AMOUNTS: If two suppliers or customers share "paanch paanch hazaar" / "5-5 hazaar" / "5000-5000" / "5,000 each" (e.g. "Supplier Rahul aur Supplier Gita, 5-5 hazaar ka udhaar"), emit ONE operation PER person with `total_amount: 5000` each (NEVER concatenate into `55000`!).
      * "Supplier Sharma ji ko 2,000 cash/online diye" -> `intent: "record_supplier_payment"`, `customer_query: "Sharma ji"`, `total_amount: 2000`, `payment_method`.
      * "Suppliers ko kitna dena baki hai?" -> `intent: "query_business"`, `query_topic: "supplier_balance"`.
    - For Customer Returns / Wapsi:
      * "Customer 2 Maggi wapas kar gaya, 28 rupaye wapas diye" -> `intent: "customer_return"`, `product_query: "Maggi"`, `quantity: 2`, `total_amount: 28`, `payment_method: "cash"` (or `"credit"` if adjusted in Khata, `"upi"` if online).
    - For Combined Multi-Item Single Bill ("ek saath", "100 mein bechi", single lump-sum bill for multiple items):
      * Emit one `record_sale` operation per item with `is_combined_bill: true`, shared `customer_query`, shared `payment_method`, `payment_status`, `paid_amount`, and set `bill_total_amount` on the first item if an explicit lump-sum bill total was spoken (e.g. `100`).
-   - For Split / Partial Payment in One Breath ("Nitin ne 500 ka saaman liya, 200 cash diye aur 300 udhaar"):
-     * Set `payment_status: "partial"`, `paid_amount: 200`, `total_amount: 500`, `payment_method: "cash"`, `customer_query: "Nitin"`. If no specific item was named ("saaman"), leave `product_query: null`.
+   - For Split / Partial Payment in One Breath (BOTH rupee split AND item-quantity split):
+     * Rupee split ("Nitin ne 500 ka saaman liya, 200 cash diye aur 300 udhaar") -> `record_sale`, `payment_status: "partial"`, `paid_amount: 200`, `total_amount: 500`, `payment_method: "cash"`, `customer_query: "Nitin"`, `product_query: null`.
+     * Item-fraction / qty split ("Nitin ko 2 kg chini bechi, usne 1 kg ke rupaye diye aur 1 kg udhaar") -> `record_sale`, `product_query: "chini"`, `quantity: 2`, `unit: "kg"`, `customer_query: "Nitin"`, `payment_status: "partial"`, `payment_method: "cash"`, and if unit price is known from catalog set `paid_amount` to paid qty * price OR set `notes: "paid_qty:1"`! NEVER mark this as 100% `"paid"`!
 5. If the speaker gives MULTIPLE commands in one breath (e.g., "20 Maggi aayi, 10 Pepsi ki bottle aayi, 5 Maggi biki"), extract ALL operations in exact chronological order inside the `operations` array.
 6. CORRECTION VS NEW OPERATION (CRITICAL — DO NOT DUPLICATE OR CROSS-CONTAMINATE):
    - If the user is correcting ANY detail of an immediately previous transaction in `active_context` (`last_operation_kind`, `last_sale_id`, `last_expense_id`, `last_damage_operation_id`, `last_product_name`) — e.g.:
      * Sale / payment corrections: "20 pepsi nahi 10 hi biki", "Actually 7 the", "Cash nahi online", "Online nahi cash tha", "Last transaction cash se nahi online hua tha", "galti se cash bol diya"
+     * Sale BILL TOTAL / RUPEE corrections: "700 nahi 100", "700 rupee nahi 100 rupee", "700 quantity nahi, 100 rupaye" -> `intent: "correct_last_operation"`, `total_amount: 100`, `quantity: null`, `payment_method: null` (DO NOT put `payment_method: "cash"` or `quantity: 100` when user is changing the rupee price!).
      * Variant swap corrections: "Maggi 70g nahi 250g wali thi", "Coke 750ml nahi 2 litre thi" -> `intent: "correct_last_operation"`, `product_query` set to the NEW variant ("Maggi 250g"), `uses_prior_context: true`, `quantity` left `null` unless qty changed!
      * Expense corrections: "1000 nahi 500 tha", "bijli bill cash nahi online diya"
      * Damage / expiry / stock-receive corrections: "Sorry, 2 damage thay", "2 damaged the, ek nahi", "do nahi, bas ek hi damaged/demis tha", "14 Nescafe gold jars aaye the unme se 2 damaged the ek nahi", "20 nahi 15 aayi thi"
@@ -128,7 +131,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         )
 
     if re.search(
-        r"(cash\s+(?:se\s+)?nahi|upi\s+(?:se\s+)?nahi|online\s+(?:se\s+)?nahi|ubi\s+se|upi\s+se|online\s+(?:hua|kiya|se)|last\s+transaction|galti\s+se|actually|sorry|ki\s+jagah|instead\s+of|(?:\b\d+|\bek\b|\bdo\b|\bteen\b|\bchaar\b|\bpaanch\b)\s+(?:\w+\s+){0,2}nahi\b|\bnot\s+(?:\d+|one|two|three)\b|\bbas\s+(?:\d+|ek|do|teen)\s+hi\b)",
+        r"(cash\s+(?:se\s+)?nahi|upi\s+(?:se\s+)?nahi|online\s+(?:se\s+)?nahi|ubi\s+se|upi\s+se|online\s+(?:hua|kiya|se)|last\s+transaction|galti\s+se|actually|sorry|ki\s+jagah|instead\s+of|(?:\b\d+|\bek\b|\bdo\b|\bteen\b|\bchaar\b|\bpaanch\b)\s+(?:\w+\s+){0,2}(?:nahi|na\s+hii?)\b|\bnot\s+(?:\d+|one|two|three)\b|\bbas\s+(?:\d+|ek|do|teen)\s+hi\b)",
         lower,
     ):
         qty = extract_post_negation_number(utterance)
@@ -144,6 +147,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         pstat = "credit" if re.search(r"\budhaar\b", lower) and not re.search(r"\budhaar\s+nahi\b", lower) else None
         is_loss_or_stock = bool(re.search(r"\b(damage|damaged|demis|kharab|toot|expire|expired|aayi|aaya|receive|bik|biki|sold|wapas|return)\b", lower))
         has_pack_unit = bool(re.search(r"\b\d+\s*(?:g|gm|gms|grams?|ml|mls|kg|kilo|ltr|litres?|liters?)\b", lower))
+        has_rupee_cue = bool(re.search(r"\b(rupees?|rupaye|rupaiye|rupi|rs|inr|bill|total|amount|quantity\s+nahi|qty\s+nahi)\b", lower))
         neg_prod_match = re.search(
             r"(?:nahi|nahin|not|ki\s+jagah|instead\s+of)\s+([a-z0-9\s]+?)(?:\s+wali|\s+thi|\s+tha|[.,]|$)",
             utterance,
@@ -168,7 +172,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
                 VoiceOperationItem(
                     intent="correct_last_operation",
                     product_query=swap_pq,
-                    quantity=None if has_pack_unit else qty,
+                    quantity=None if (has_pack_unit or has_rupee_cue) else qty,
                     total_amount=None if (is_loss_or_stock or has_pack_unit) else qty,
                     payment_method=pm,  # type: ignore[arg-type]
                     uses_prior_context=True,

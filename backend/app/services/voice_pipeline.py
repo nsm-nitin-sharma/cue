@@ -488,7 +488,7 @@ class VoicePipelineService:
             r"(?:\b(?:sold|bik|biki|bika|bech|bechi|aayi|aaya|receive|add|expense|kharcha|udhaar|khata|paid|payment|damage|damaged|demis|expire|expired|inventory|stock|cancel|chhodo|hatao)\b|(?:cash|online|upi)\s+(?:se\s+)?(?:nahi|नहीं)|last\s+transaction)",
             re.IGNORECASE,
         )
-        is_short_confirm = any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "ok", "same", "free"))
+        is_short_confirm = any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "ok", "same", "free", "confirm", "bilkul", "theek"))
         if not is_short_confirm and new_cmd_pattern.search(lower):
             context_state.pop("pending_flow", None)
             if re.search(r"\b(cancel|chhodo|hatao)\b", lower):
@@ -539,6 +539,32 @@ class VoicePipelineService:
                     language=language,  # type: ignore[arg-type]
                 )
                 self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, reply_text, language, stt_provider, stt_confidence, pending_flow, "needs_clarification", "tier2", [], res, context_state, user_id)
+                return res
+
+        if flow_type == "tier3_confirm":
+            if any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "bilkul", "confirm", "ok", "theek")):
+                context_state.pop("pending_flow", None)
+                self.memory.update_context_state(conversation_id=conv_id, state=context_state)
+                return self.confirm_tier3(
+                    business_id=business_id,
+                    user_id=user_id,
+                    req=ConfirmOperationRequest(
+                        operation_id=str(pending_flow["operation_id"]),
+                        confirmation_token=str(pending_flow["token"]),
+                        accept=True,
+                    ),
+                )
+            if any(lower.startswith(w) for w in ("no", "nahi", "na ", "cancel", "mat", "galat")):
+                context_state.pop("pending_flow", None)
+                msg = "High-value transaction cancel kar diya gaya hai. Koi record change nahi hua."
+                res = VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="executed",
+                    transcript=reply_text,
+                    reply=msg,
+                    language=language,  # type: ignore[arg-type]
+                )
+                self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, reply_text, language, stt_provider, stt_confidence, pending_flow, "executed", "tier3", [], res, context_state, user_id)
                 return res
 
         if flow_type == "verify_alias":
@@ -723,6 +749,75 @@ class VoicePipelineService:
             )
 
         return None
+
+    def _issue_tier3_response(
+        self,
+        *,
+        draft: dict[str, Any],
+        title: str,
+        description: str,
+        total_val: float,
+        business_id: str,
+        user_id: str,
+        conv_id: str,
+        today_str: str,
+        operation_id: str,
+        payload_hash: str,
+        raw_transcript: str,
+        language: str,
+        stt_provider: str,
+        stt_confidence: float | None,
+        context_state: dict[str, Any],
+        prefix_receipts: list[dict[str, Any]] | None = None,
+    ) -> VoiceTurnResult:
+        token = self.tx.issue_confirmation_token(
+            business_id=business_id,
+            user_id=user_id,
+            operation_id=operation_id,
+            proposed_action=draft,
+        )
+        context_state["pending_flow"] = {
+            "type": "tier3_confirm",
+            "operation_id": operation_id,
+            "token": token,
+        }
+        msg = f"Yeh ₹{total_val:,.0f} ka high-value transaction hai ({description}). Confirm karne ke liye 'Yes' bolein ya Confirm dabayein."
+        res = VoiceTurnResult(
+            operation_id=operation_id,
+            status="needs_confirmation",
+            transcript=raw_transcript,
+            reply=msg,
+            language=language,  # type: ignore[arg-type]
+            receipts=list(prefix_receipts or []),
+            confirmation={
+                "operationId": operation_id,
+                "token": token,
+                "title": title,
+                "description": description,
+                "amountINR": total_val,
+                "impactSummary": f"Total value ₹{total_val:,.0f} requires Tier-3 authorization",
+                "payload": draft,
+            },
+        )
+        self._finalize_turn(
+            conv_id,
+            business_id,
+            today_str,
+            operation_id,
+            payload_hash,
+            raw_transcript,
+            language,
+            stt_provider,
+            stt_confidence,
+            draft,
+            "needs_confirmation",
+            "tier3",
+            [],
+            res,
+            context_state,
+            user_id,
+        )
+        return res
 
     async def _complete_single_draft(
         self,
@@ -953,6 +1048,8 @@ class VoicePipelineService:
             context_state["last_product_id"] = str(product["id"])
             context_state["last_product_name"] = product["name"]
             context_state["last_sale_id"] = str(rpc["sale_id"])
+            context_state["last_sale_total"] = total
+            context_state["last_sale_qty"] = qty
             context_state["last_operation_kind"] = "record_sale"
             context_state["last_operation_id"] = operation_id
             method_label = "Online" if p_method == "upi" else ("Bank" if p_method == "bank" else "Cash")
@@ -1082,6 +1179,274 @@ class VoicePipelineService:
                 "transactionDate": txn_date,
                 "lines": [{"label": "Catalog Status", "value": "Archived", "tone": "neutral"}],
                 "status": "saved",
+            }
+            return slip, reply
+
+        if intent == "record_supplier_credit":
+            sup_id = str(draft["supplier_id"])
+            sup_name = str(draft["supplier_name"])
+            amt = float(draft["total_amount"])
+            sc = self.tx.record_supplier_credit(business_id=business_id, supplier_id=sup_id, amount=amt)
+            context_state["last_operation_kind"] = "record_supplier_credit"
+            context_state["last_operation_id"] = operation_id
+            reply = f"Supplier {sup_name} ke Khata mein ₹{amt:,.0f} payable add ho gaya (Total Payable: ₹{sc['after_balance']:,.0f})."
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "receive",
+                "title": f"Supplier Credit · {sup_name}",
+                "subtitle": "Wholesale Accounts Payable",
+                "transactionDate": txn_date,
+                "amountINR": amt,
+                "lines": [
+                    {"label": "Credit Added", "value": f"+₹{amt:,.0f}", "tone": "ochre"},
+                    {"label": "Total Payable", "value": f"₹{sc['after_balance']:,.0f}", "tone": "neutral"},
+                ],
+                "status": "saved",
+                "reversible": True,
+                "_supplier_op": {"type": "credit", "supplier_id": sup_id, "amount": amt},
+            }
+            return slip, reply
+
+        if intent == "record_supplier_payment":
+            sup_id = str(draft["supplier_id"])
+            sup_name = str(draft["supplier_name"])
+            amt = float(draft["total_amount"])
+            pm_sup = str(draft.get("payment_method") or "cash")
+            pm_lbl = "Online" if pm_sup == "upi" else ("Bank" if pm_sup == "bank" else "Cash")
+            sp = self.tx.record_supplier_payment(
+                business_id=business_id,
+                user_id=user_id,
+                supplier_id=sup_id,
+                supplier_name=sup_name,
+                amount=amt,
+                payment_method=pm_sup,
+                transaction_date=txn_date,
+                operation_id=operation_id,
+            )
+            context_state["last_operation_kind"] = "record_supplier_payment"
+            context_state["last_operation_id"] = operation_id
+            reply = f"Supplier {sup_name} ko ₹{amt:,.0f} ({pm_lbl}) pay kar diya gaya. Remaining Payable: ₹{sp['after_balance']:,.0f}."
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "expense",
+                "title": f"Supplier Paid · {sup_name}",
+                "subtitle": f"Via {pm_lbl}",
+                "transactionDate": txn_date,
+                "amountINR": amt,
+                "lines": [
+                    {"label": "Paid Amount", "value": f"₹{amt:,.0f} ({pm_lbl})", "tone": "sage"},
+                    {"label": "Remaining Payable", "value": f"₹{sp['after_balance']:,.0f}", "tone": "ochre" if sp["after_balance"] > 0 else "sage"},
+                ],
+                "status": "saved",
+                "reversible": True,
+                "_supplier_op": {"type": "payment", "supplier_id": sup_id, "amount": amt},
+            }
+            return slip, reply
+
+        if intent == "record_udhaar_credit":
+            cust_id = str(draft["customer_id"])
+            cust_name = str(draft["customer_name"])
+            amt = float(draft["total_amount"])
+            ud = self.tx.record_direct_udhaar(
+                business_id=business_id,
+                user_id=user_id,
+                customer_id=cust_id,
+                amount=amt,
+                transaction_date=txn_date,
+                operation_id=operation_id,
+                notes=str(draft.get("notes") or "Voice Khata entry"),
+            )
+            context_state["last_operation_kind"] = "record_udhaar_credit"
+            context_state["last_operation_id"] = operation_id
+            context_state["last_customer_id"] = cust_id
+            context_state["last_customer_name"] = cust_name
+            reply = f"{cust_name} ke khate mein ₹{amt:,.0f} udhaar likh diya gaya (Balance ₹{ud['after_balance']:,.0f})."
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "sale",
+                "title": f"Khata Udhaar · {cust_name}",
+                "subtitle": "Direct Credit Entry",
+                "transactionDate": txn_date,
+                "amountINR": amt,
+                "lines": [{"label": "New Balance", "value": f"₹{ud['after_balance']:,.0f}", "tone": "ochre"}],
+                "status": "saved",
+                "reversible": True,
+            }
+            return slip, reply
+
+        if intent == "record_customer_payment":
+            cust_id = str(draft["customer_id"])
+            cust_name = str(draft["customer_name"])
+            amt = float(draft["total_amount"])
+            pm = str(draft.get("payment_method") or "cash")
+            pay = self.tx.record_customer_payment(
+                business_id=business_id,
+                user_id=user_id,
+                customer_id=cust_id,
+                amount=amt,
+                payment_method=pm,
+                transaction_date=txn_date,
+                operation_id=operation_id,
+            )
+            context_state["last_operation_kind"] = "record_customer_payment"
+            context_state["last_operation_id"] = operation_id
+            context_state["last_customer_id"] = cust_id
+            context_state["last_customer_name"] = cust_name
+            method_label = "Online" if pm == "upi" else ("Bank" if pm == "bank" else "Cash")
+            reply = (
+                f"{cust_name} se ₹{amt:,.0f} ({method_label}) receive ho gaya aur Sales ledger mein include ho gaya. "
+                f"Remaining balance: ₹{pay['after_balance']:,.0f}."
+            )
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "payment",
+                "title": f"Payment Received · {cust_name}",
+                "subtitle": f"Via {method_label} · Included in Sales & Revenue",
+                "transactionDate": txn_date,
+                "amountINR": amt,
+                "lines": [
+                    {"label": "Sales Ledger", "value": "Updated & Included", "tone": "sage"},
+                    {"label": "Remaining Balance", "value": f"₹{pay['after_balance']:,.0f}", "tone": "ochre" if pay["after_balance"] > 0 else "sage"},
+                ],
+                "status": "saved",
+                "reversible": True,
+            }
+            return slip, reply
+
+        if intent == "record_split_customer_sale":
+            cust_id = str(draft["customer_id"])
+            cust_name = str(draft["customer_name"])
+            pm = str(draft.get("payment_method") or "cash")
+            sp_res = self.tx.record_split_customer_sale(
+                business_id=business_id,
+                user_id=user_id,
+                customer_id=cust_id,
+                total_amount=float(draft["total_amount"]),
+                paid_amount=float(draft["paid_amount"]),
+                payment_method=pm,
+                transaction_date=txn_date,
+                operation_id=operation_id,
+            )
+            context_state["last_sale_id"] = str(sp_res["sale_id"])
+            context_state["last_sale_total"] = float(sp_res["total_amount"])
+            context_state["last_sale_qty"] = 1.0
+            context_state["last_operation_kind"] = "record_sale"
+            context_state["last_operation_id"] = operation_id
+            pm_lbl = "Online" if pm == "upi" else ("Bank" if pm == "bank" else "Cash")
+            reply = (
+                f"{cust_name} ki ₹{sp_res['total_amount']:,.0f} sale save ho gayi: ₹{sp_res['paid_amount']:,.0f} {pm_lbl} aur ₹{sp_res['credit_amount']:,.0f} Udhaar (New Balance: ₹{sp_res['after_balance']:,.0f})."
+            )
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "sale",
+                "title": f"Split Sale · {cust_name}",
+                "subtitle": f"{pm_lbl} + Khata Udhaar",
+                "transactionDate": txn_date,
+                "amountINR": sp_res["total_amount"],
+                "lines": [
+                    {"label": f"Paid ({pm_lbl})", "value": f"₹{sp_res['paid_amount']:,.0f}", "tone": "sage"},
+                    {"label": "Khata Udhaar", "value": f"₹{sp_res['credit_amount']:,.0f}", "tone": "ochre"},
+                    {"label": "Total Khata Balance", "value": f"₹{sp_res['after_balance']:,.0f}", "tone": "neutral"},
+                ],
+                "status": "saved",
+                "reversible": True,
+            }
+            return slip, reply
+
+        if intent == "record_combined_bill":
+            bill_cust_name = draft.get("customer_name")
+            pm = str(draft.get("payment_method") or "cash")
+            cb = self.tx.record_combined_bill(
+                business_id=business_id,
+                user_id=user_id,
+                items=list(draft["items"]),
+                customer_id=draft.get("customer_id"),
+                bill_total_amount=draft.get("bill_total_amount"),
+                paid_amount=draft.get("paid_amount"),
+                payment_status=str(draft.get("payment_status") or "paid"),
+                payment_method=pm,
+                transaction_date=txn_date,
+                operation_id=operation_id,
+                notes=str(draft.get("notes") or "Combined bill"),
+            )
+            context_state["last_sale_id"] = str(cb["sale_id"])
+            context_state["last_sale_total"] = float(cb["total_amount"])
+            context_state["last_sale_qty"] = sum(float(it["quantity"]) for it in cb["items"])
+            context_state["last_operation_kind"] = "record_sale"
+            context_state["last_operation_id"] = operation_id
+            items_summary = ", ".join(f"{it['quantity']:g} {it['product_name']}" for it in cb["items"])
+            disc_txt = f" (₹{cb['discount_amount']:,.0f} discount)" if cb["discount_amount"] > 0 else ""
+            reply = f"Combined bill ({items_summary}) ₹{cb['total_amount']:,.0f}{disc_txt} save ho gaya."
+            bill_lines = [
+                {"label": it["product_name"], "value": f"-{it['quantity']:g} {it['unit']} @ ₹{it['unit_price']:g} = ₹{it['line_total']:,.0f}", "tone": "sage"}
+                for it in cb["items"]
+            ]
+            if cb["discount_amount"] > 0:
+                bill_lines.append({"label": "Discount", "value": f"-₹{cb['discount_amount']:,.0f}", "tone": "ochre"})
+            if cb["payment_status"] == "partial":
+                bill_lines.append({"label": "Paid / Udhaar", "value": f"₹{cb['paid_amount']:,.0f} / ₹{cb['credit_amount']:,.0f}", "tone": "ochre"})
+            elif cb["payment_status"] == "credit":
+                bill_lines.append({"label": "Khata Udhaar", "value": f"₹{cb['total_amount']:,.0f}", "tone": "ochre"})
+            else:
+                pm_lbl = "Online" if pm == "upi" else ("Bank" if pm == "bank" else "Cash")
+                bill_lines.append({"label": "Payment", "value": pm_lbl, "tone": "sage"})
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "sale",
+                "title": f"Combined Bill · {len(cb['items'])} Items",
+                "subtitle": f"{bill_cust_name + ' · ' if bill_cust_name else ''}Single Invoice",
+                "transactionDate": txn_date,
+                "amountINR": cb["total_amount"],
+                "lines": bill_lines,
+                "status": "saved",
+                "reversible": True,
+            }
+            return slip, reply
+
+        if intent == "customer_return" and product:
+            ret_qty = float(draft["quantity"])
+            refund_m = str(draft.get("refund_method") or "cash")
+            ret_cust_name = draft.get("customer_name")
+            ret_res = self.tx.record_customer_return(
+                business_id=business_id,
+                user_id=user_id,
+                product_id=str(product["id"]),
+                product_name=product["name"],
+                quantity=ret_qty,
+                unit=product["base_unit"],
+                refund_amount=float(draft["total_amount"]),
+                refund_method=refund_m,
+                customer_id=draft.get("customer_id"),
+                transaction_date=txn_date,
+                operation_id=operation_id,
+            )
+            context_state["last_product_id"] = str(product["id"])
+            context_state["last_product_name"] = product["name"]
+            context_state["last_operation_kind"] = "customer_return"
+            context_state["last_operation_id"] = operation_id
+            refund_lbl = "Khata Udhaar" if refund_m == "credit" else ("Online" if refund_m == "upi" else ("Bank" if refund_m == "bank" else "Cash"))
+            reply = f"{ret_qty:g} {product['name']} wapas li gayi, ₹{ret_res['refund_amount']:,.0f} {refund_lbl} adjust hua. Updated stock: {ret_res['after_stock']:g}."
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "receive",
+                "title": f"Customer Return · {product['name']}",
+                "subtitle": f"{ret_cust_name + ' · ' if ret_cust_name else ''}Wapsi & Refund",
+                "transactionDate": txn_date,
+                "amountINR": ret_res["refund_amount"],
+                "lines": [
+                    {"label": "Returned Stock", "value": f"+{ret_qty:g} {product['base_unit']}", "tone": "sage"},
+                    {"label": f"Refund ({refund_lbl})", "value": f"₹{ret_res['refund_amount']:,.0f}", "tone": "ochre"},
+                    {"label": "Stock Level", "value": f"{ret_res['before_stock']:g} → {ret_res['after_stock']:g}", "tone": "neutral"},
+                ],
+                "status": "saved",
+                "reversible": True,
             }
             return slip, reply
 
@@ -1718,16 +2083,87 @@ class VoicePipelineService:
                     )
                     continue
 
-                # 4. Sale payment method/status correction
+                # 3b. Sale total rupee / bill amount correction (e.g., "700 na hii 100", "700 rupee nahi, 100 rupee")
+                tlow = raw_transcript.lower()
+                rupee_cue = bool(
+                    re.search(
+                        r"\b(rupees?|rupaye|rupaiye|rupai|rupi|rs|inr|bill|total|amount|rate|price|quantity\s+nahi|qty\s+nahi)\b",
+                        tlow,
+                    )
+                )
+                last_sale_tot = float(context_state.get("last_sale_total") or 0)
+                pre_neg_m = re.search(
+                    r"\b(\d+(?:\.\d+)?)\s*(?:rupees?|rupaye|rupi)?\s*(?:na\s+hii?|nahi|nahin|not|ki\s+jagah|instead\s+of)\b",
+                    tlow,
+                )
+                matches_prev_total = bool(
+                    pre_neg_m and last_sale_tot > 0 and abs(float(pre_neg_m.group(1)) - last_sale_tot) < 0.01
+                )
+                explicit_amt_target = op.bill_total_amount if op.bill_total_amount is not None else op.total_amount
+                post_neg_amt = extract_post_negation_number(raw_transcript)
+                is_amount_corr = bool(
+                    sale_id
+                    and not loss_cue
+                    and not expense_cue
+                    and (last_kind == "record_sale" or sale_cue or last_kind is None)
+                    and (rupee_cue or matches_prev_total or explicit_amt_target is not None)
+                )
+                corr_amt_val = explicit_amt_target if explicit_amt_target is not None else post_neg_amt
+                if is_amount_corr and corr_amt_val is not None and float(corr_amt_val) >= 0:
+                    try:
+                        ca = self.tx.correct_sale_amount(
+                            business_id=business_id,
+                            user_id=user_id,
+                            sale_id=str(sale_id),
+                            new_total_amount=float(corr_amt_val),
+                            operation_id=sub_op_id,
+                            transaction_date=today_str,
+                        )
+                    except PolicyBlockedError as exc:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=exc.message,
+                            language=language,  # type: ignore[arg-type]
+                        )
+                    context_state["last_sale_id"] = str(ca["new_sale_id"])
+                    context_state["last_sale_total"] = float(ca["new_total"])
+                    context_state["last_operation_kind"] = "record_sale"
+                    context_state["last_operation_id"] = sub_op_id
+                    replies.append(
+                        f"Sale bill update ho gaya: ₹{ca['old_total']:,.0f} se ₹{ca['new_total']:,.0f}."
+                    )
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "correction",
+                            "title": "Corrected Bill Amount",
+                            "subtitle": "Previous bill marked corrected (Stock unchanged)",
+                            "transactionDate": today_str,
+                            "amountINR": ca["new_total"],
+                            "lines": [
+                                {"label": "Old Amount", "value": f"₹{ca['old_total']:,.0f}", "tone": "ochre"},
+                                {"label": "New Amount", "value": f"₹{ca['new_total']:,.0f}", "tone": "sage"},
+                            ],
+                            "status": "corrected",
+                            "reversible": True,
+                        }
+                    )
+                    continue
+
+                # 4. Sale payment method/status correction (require spoken payment/udhaar cue so amount/qty edits are never hijacked)
+                has_spoken_pm_cue = bool(re.search(r"\b(online|upi|ubi|gpay|phonepe|paytm|cash|bank|udhaar|credit)\b", tlow))
                 if sale_id and not loss_cue and not expense_cue and (
                     last_kind == "record_sale" or sale_cue or last_kind is None
                 ) and (
+                    has_spoken_pm_cue
+                    or op.payment_status is not None
+                ) and (
                     op.payment_method is not None
                     or op.payment_status is not None
-                    or (
-                        op.quantity is None
-                        and re.search(r"\b(online|upi|cash|bank|udhaar)\b", raw_transcript.lower())
-                    )
+                    or (op.quantity is None and has_spoken_pm_cue)
                 ):
                     target_pm = op.payment_method
                     target_ps = op.payment_status
@@ -1969,6 +2405,43 @@ class VoicePipelineService:
                             bill_cust_id = str(new_bc["id"])
                             bill_cust_name = new_bc["name"]
 
+                    est_cb_total = float(
+                        shared_bill_tot
+                        if shared_bill_tot is not None and shared_bill_tot >= 0
+                        else sum(float(it["quantity"]) * float(it["unit_price"]) for it in bill_items)
+                    )
+                    if SecurityPolicyEngine.classify_risk_tier(intent="record_sale", amount_inr=est_cb_total) == "tier3":
+                        cb_draft = {
+                            "intent": "record_combined_bill",
+                            "items": bill_items,
+                            "customer_id": bill_cust_id,
+                            "customer_name": bill_cust_name,
+                            "bill_total_amount": shared_bill_tot,
+                            "paid_amount": shared_paid,
+                            "payment_status": shared_ps,
+                            "payment_method": shared_pm,
+                            "transaction_date": txn_date_str,
+                            "notes": f"{bill_cust_name + ' · ' if bill_cust_name else ''}Combined bill",
+                        }
+                        return self._issue_tier3_response(
+                            draft=cb_draft,
+                            title=f"High-Value Combined Bill ({len(bill_items)} Items)",
+                            description=", ".join(f"{it['quantity']:g} {it['product_name']}" for it in bill_items),
+                            total_val=est_cb_total,
+                            business_id=business_id,
+                            user_id=user_id,
+                            conv_id=conv_id,
+                            today_str=today_str,
+                            operation_id=sub_op_id,
+                            payload_hash=payload_hash,
+                            raw_transcript=raw_transcript,
+                            language=language,
+                            stt_provider=stt_provider,
+                            stt_confidence=stt_confidence,
+                            context_state=context_state,
+                            prefix_receipts=receipts,
+                        )
+
                     try:
                         cb = self.tx.record_combined_bill(
                             business_id=business_id,
@@ -2000,6 +2473,8 @@ class VoicePipelineService:
                         processed_indices.add(j)
 
                     context_state["last_sale_id"] = str(cb["sale_id"])
+                    context_state["last_sale_total"] = float(cb["total_amount"])
+                    context_state["last_sale_qty"] = sum(float(it["quantity"]) for it in cb["items"])
                     context_state["last_operation_kind"] = "record_sale"
                     context_state["last_operation_id"] = sub_op_id
                     items_summary = ", ".join(f"{it['quantity']:g} {it['product_name']}" for it in cb["items"])
@@ -2076,6 +2551,34 @@ class VoicePipelineService:
                 tot_sp = float(op.total_amount or op.paid_amount or 0)
                 paid_sp = float(op.paid_amount or 0) if op.payment_status == "partial" else (tot_sp if op.payment_status != "credit" else 0.0)
                 pm_sp = op.payment_method or "cash"
+                if SecurityPolicyEngine.classify_risk_tier(intent="record_sale", amount_inr=tot_sp) == "tier3":
+                    sp_draft = {
+                        "intent": "record_split_customer_sale",
+                        "customer_id": str(cust_sp["id"]),
+                        "customer_name": cust_sp["name"],
+                        "total_amount": tot_sp,
+                        "paid_amount": paid_sp,
+                        "payment_method": pm_sp,
+                        "transaction_date": txn_date_str,
+                    }
+                    return self._issue_tier3_response(
+                        draft=sp_draft,
+                        title=f"High-Value Split Sale · {cust_sp['name']}",
+                        description=f"{cust_sp['name']} · ₹{tot_sp:,.0f}",
+                        total_val=tot_sp,
+                        business_id=business_id,
+                        user_id=user_id,
+                        conv_id=conv_id,
+                        today_str=today_str,
+                        operation_id=sub_op_id,
+                        payload_hash=payload_hash,
+                        raw_transcript=raw_transcript,
+                        language=language,
+                        stt_provider=stt_provider,
+                        stt_confidence=stt_confidence,
+                        context_state=context_state,
+                        prefix_receipts=receipts,
+                    )
                 sp_res = self.tx.record_split_customer_sale(
                     business_id=business_id,
                     user_id=user_id,
@@ -2420,14 +2923,51 @@ class VoicePipelineService:
                         if cres_sale.status == "exact" and cres_sale.customer:
                             resolved_customer_id = str(cres_sale.customer["id"])
                             resolved_customer_name = cres_sale.customer["name"]
-                        elif op.payment_status == "credit":
+                        elif (op.payment_status in {"credit", "partial"}) or re.search(r"\budhaar\b", raw_transcript, re.IGNORECASE):
                             new_cust = self.tx.create_customer(
                                 business_id=business_id,
                                 name=op.customer_query.title(),
                             )
                             customers.append(new_cust)
+                            non_supplier_customers.append(new_cust)
                             resolved_customer_id = str(new_cust["id"])
                             resolved_customer_name = new_cust["name"]
+
+                    # Deterministic split/partial payment recovery for single-item sales
+                    # e.g. "Nitin ko 2 kg chini bechi, usne 1 kg ke rupaye diye aur 1 kg udhaar"
+                    eff_unit_price = float(op.unit_price or target_prod.get("default_selling_price") or 0)
+                    eff_total = round(conv_qty * eff_unit_price, 2)
+                    eff_pstat = op.payment_status or "paid"
+                    eff_paid = op.paid_amount
+                    split_speech_cue = bool(
+                        len(operations) == 1
+                        and re.search(r"\b(udhaar|credit)\b", raw_transcript, re.IGNORECASE)
+                        and re.search(
+                            r"\b(cash|online|upi|bank|rupay|rupaye|rupee|rupi|paise|diye|diya|doei|paid|aadha|half)\b",
+                            raw_transcript,
+                            re.IGNORECASE,
+                        )
+                    )
+                    if op.intent == "record_sale" and (eff_pstat == "partial" or split_speech_cue) and eff_total > 0:
+                        eff_pstat = "partial"
+                        if eff_paid is None or float(eff_paid) <= 0 or float(eff_paid) >= eff_total:
+                            paid_qty_m = None
+                            if op.notes and "paid_qty:" in str(op.notes):
+                                mq = re.search(r"paid_qty:(\d+(?:\.\d+)?)", str(op.notes))
+                                if mq:
+                                    paid_qty_m = float(mq.group(1))
+                            if paid_qty_m is None:
+                                m_frac = re.search(
+                                    r"(?:usne|aur|,)\s*(\d+(?:\.\d+)?|\bek\b|\bdo\b|\bteen\b|\baadha\b|\bhalf\b)\s*(?:kg|kilo|gram|g|packet|packets|piece|pieces|litre|ltr|box)?\s*(?:ke|ki)?\s*(?:rupay|rupaye|rupaiye|rupee|rupi|paise|cash|online|upi|rs)?\s*(?:diye|diya|doei|paid)",
+                                    raw_transcript,
+                                    re.IGNORECASE,
+                                )
+                                if m_frac:
+                                    paid_qty_m = parse_indian_number(m_frac.group(1))
+                            if paid_qty_m is not None and 0 < paid_qty_m < conv_qty:
+                                eff_paid = round(paid_qty_m * eff_unit_price, 2)
+                            elif re.search(r"\b(aadha|adha|half)\b", raw_transcript, re.IGNORECASE):
+                                eff_paid = round(eff_total / 2.0, 2)
 
                     draft = {
                         "intent": op.intent,
@@ -2436,9 +2976,9 @@ class VoicePipelineService:
                         "quantity": conv_qty,
                         "unit": target_prod["base_unit"],
                         "unit_price": op.unit_price,
-                        "payment_status": op.payment_status or "paid",
+                        "payment_status": eff_pstat,
                         "payment_method": op.payment_method or "cash",
-                        "paid_amount": op.paid_amount,
+                        "paid_amount": eff_paid,
                         "customer_id": resolved_customer_id,
                         "customer_name": resolved_customer_name,
                         "transaction_date": txn_date_str,
@@ -2501,6 +3041,38 @@ class VoicePipelineService:
                             replies.append(rep)
                             continue
 
+                    # Tier-3 check (>= ₹5,000) for direct product sale / stock receive
+                    est_val = round(
+                        float(conv_qty)
+                        * float(
+                            op.unit_price
+                            if op.unit_price is not None
+                            else (target_prod.get("default_selling_price", 0) if op.intent == "record_sale" else target_prod.get("default_cost_price", 0))
+                        ),
+                        2,
+                    )
+                    if op.intent in {"record_sale", "inventory_receive"} and SecurityPolicyEngine.classify_risk_tier(
+                        intent=op.intent, amount_inr=est_val
+                    ) == "tier3":
+                        return self._issue_tier3_response(
+                            draft=draft,
+                            title=f"High-Value {op.intent.replace('_', ' ').title()}",
+                            description=f"{target_prod['name']} · {conv_qty:g} {target_prod['base_unit']}",
+                            total_val=est_val,
+                            business_id=business_id,
+                            user_id=user_id,
+                            conv_id=conv_id,
+                            today_str=today_str,
+                            operation_id=sub_op_id,
+                            payload_hash=payload_hash,
+                            raw_transcript=raw_transcript,
+                            language=language,
+                            stt_provider=stt_provider,
+                            stt_confidence=stt_confidence,
+                            context_state=context_state,
+                            prefix_receipts=receipts,
+                        )
+
                     slip, rep = self._commit_draft_now(
                         draft=draft,
                         business_id=business_id,
@@ -2528,14 +3100,36 @@ class VoicePipelineService:
                     return res
 
             elif op.intent == "record_expense" and op.total_amount:
+                exp_amt = float(op.total_amount)
+                exp_draft = {
+                    "intent": "record_expense",
+                    "total_amount": exp_amt,
+                    "expense_category": op.expense_category or "Shop Expense",
+                    "description": op.description or raw_transcript,
+                    "payment_method": op.payment_method or "cash",
+                    "transaction_date": txn_date_str,
+                }
+                if SecurityPolicyEngine.classify_risk_tier(intent="record_expense", amount_inr=exp_amt) == "tier3":
+                    return self._issue_tier3_response(
+                        draft=exp_draft,
+                        title=f"High-Value Expense · {exp_draft['expense_category']}",
+                        description=f"{exp_draft['expense_category']} · ₹{exp_amt:,.0f}",
+                        total_val=exp_amt,
+                        business_id=business_id,
+                        user_id=user_id,
+                        conv_id=conv_id,
+                        today_str=today_str,
+                        operation_id=sub_op_id,
+                        payload_hash=payload_hash,
+                        raw_transcript=raw_transcript,
+                        language=language,
+                        stt_provider=stt_provider,
+                        stt_confidence=stt_confidence,
+                        context_state=context_state,
+                        prefix_receipts=receipts,
+                    )
                 slip, rep = self._commit_draft_now(
-                    draft={
-                        "intent": "record_expense",
-                        "total_amount": float(op.total_amount),
-                        "expense_category": op.expense_category or "Shop Expense",
-                        "description": op.description or raw_transcript,
-                        "payment_method": op.payment_method or "cash",
-                    },
+                    draft=exp_draft,
                     business_id=business_id,
                     user_id=user_id,
                     operation_id=sub_op_id,
@@ -2619,6 +3213,35 @@ class VoicePipelineService:
                     else round(ret_qty * float(op.unit_price or ret_prod.get("default_selling_price") or 0), 2)
                 )
                 refund_m = op.payment_method or "cash"
+                if SecurityPolicyEngine.classify_risk_tier(intent="customer_return", amount_inr=refund_amt) == "tier3":
+                    return self._issue_tier3_response(
+                        draft={
+                            "intent": "customer_return",
+                            "product_id": str(ret_prod["id"]),
+                            "product_name": ret_prod["name"],
+                            "quantity": ret_qty,
+                            "total_amount": refund_amt,
+                            "refund_method": refund_m,
+                            "customer_id": ret_cust_id,
+                            "customer_name": ret_cust_name,
+                            "transaction_date": txn_date_str,
+                        },
+                        title=f"High-Value Return · {ret_prod['name']}",
+                        description=f"{ret_qty:g} {ret_prod['name']} · ₹{refund_amt:,.0f}",
+                        total_val=refund_amt,
+                        business_id=business_id,
+                        user_id=user_id,
+                        conv_id=conv_id,
+                        today_str=today_str,
+                        operation_id=sub_op_id,
+                        payload_hash=payload_hash,
+                        raw_transcript=raw_transcript,
+                        language=language,
+                        stt_provider=stt_provider,
+                        stt_confidence=stt_confidence,
+                        context_state=context_state,
+                        prefix_receipts=receipts,
+                    )
                 ret_res = self.tx.record_customer_return(
                     business_id=business_id,
                     user_id=user_id,
@@ -2687,6 +3310,36 @@ class VoicePipelineService:
                 sup_row, created_new = self.tx.find_or_create_supplier(business_id=business_id, name=sup_name)
                 if created_new:
                     customers.append(sup_row)
+                if SecurityPolicyEngine.classify_risk_tier(intent=op.intent, amount_inr=sup_amt) == "tier3":
+                    return self._issue_tier3_response(
+                        draft={
+                            "intent": op.intent,
+                            "supplier_id": str(sup_row["id"]),
+                            "supplier_name": str(sup_row["name"]),
+                            "total_amount": sup_amt,
+                            "payment_method": op.payment_method or "cash",
+                            "transaction_date": txn_date_str,
+                        },
+                        title=(
+                            f"High-Value Supplier Credit · {sup_row['name']}"
+                            if op.intent == "record_supplier_credit"
+                            else f"High-Value Supplier Payment · {sup_row['name']}"
+                        ),
+                        description=f"Supplier {sup_row['name']} · ₹{sup_amt:,.0f}",
+                        total_val=sup_amt,
+                        business_id=business_id,
+                        user_id=user_id,
+                        conv_id=conv_id,
+                        today_str=today_str,
+                        operation_id=sub_op_id,
+                        payload_hash=payload_hash,
+                        raw_transcript=raw_transcript,
+                        language=language,
+                        stt_provider=stt_provider,
+                        stt_confidence=stt_confidence,
+                        context_state=context_state,
+                        prefix_receipts=receipts,
+                    )
                 if op.intent == "record_supplier_credit":
                     sc = self.tx.record_supplier_credit(
                         business_id=business_id,
@@ -2852,6 +3505,32 @@ class VoicePipelineService:
                                 reply=f"{cust['name']} ke khate mein kitne rupaye udhaar likhne hain?",
                                 language=language,  # type: ignore[arg-type]
                             )
+                        if SecurityPolicyEngine.classify_risk_tier(intent="record_udhaar_credit", amount_inr=amt) == "tier3":
+                            return self._issue_tier3_response(
+                                draft={
+                                    "intent": "record_udhaar_credit",
+                                    "customer_id": str(cust["id"]),
+                                    "customer_name": cust["name"],
+                                    "total_amount": amt,
+                                    "notes": op.description or "Voice Khata entry",
+                                    "transaction_date": txn_date_str,
+                                },
+                                title=f"High-Value Khata Udhaar · {cust['name']}",
+                                description=f"{cust['name']} · ₹{amt:,.0f}",
+                                total_val=amt,
+                                business_id=business_id,
+                                user_id=user_id,
+                                conv_id=conv_id,
+                                today_str=today_str,
+                                operation_id=sub_op_id,
+                                payload_hash=payload_hash,
+                                raw_transcript=raw_transcript,
+                                language=language,
+                                stt_provider=stt_provider,
+                                stt_confidence=stt_confidence,
+                                context_state=context_state,
+                                prefix_receipts=receipts,
+                            )
                         ud = self.tx.record_direct_udhaar(
                             business_id=business_id,
                             user_id=user_id,
@@ -2889,6 +3568,32 @@ class VoicePipelineService:
                                 transcript=raw_transcript,
                                 reply=f"{cust['name']} se kitne rupaye receive hue?",
                                 language=language,  # type: ignore[arg-type]
+                            )
+                        if SecurityPolicyEngine.classify_risk_tier(intent="record_customer_payment", amount_inr=amt) == "tier3":
+                            return self._issue_tier3_response(
+                                draft={
+                                    "intent": "record_customer_payment",
+                                    "customer_id": str(cust["id"]),
+                                    "customer_name": cust["name"],
+                                    "total_amount": amt,
+                                    "payment_method": op.payment_method or "cash",
+                                    "transaction_date": txn_date_str,
+                                },
+                                title=f"High-Value Payment · {cust['name']}",
+                                description=f"{cust['name']} · ₹{amt:,.0f}",
+                                total_val=amt,
+                                business_id=business_id,
+                                user_id=user_id,
+                                conv_id=conv_id,
+                                today_str=today_str,
+                                operation_id=sub_op_id,
+                                payload_hash=payload_hash,
+                                raw_transcript=raw_transcript,
+                                language=language,
+                                stt_provider=stt_provider,
+                                stt_confidence=stt_confidence,
+                                context_state=context_state,
+                                prefix_receipts=receipts,
                             )
                         pay = self.tx.record_customer_payment(
                             business_id=business_id,
@@ -3131,6 +3836,7 @@ class VoicePipelineService:
         product = next((p for p in products if str(p["id"]) == str(draft.get("product_id"))), None)
         conv = self.memory.get_or_create_day_conversation(business_id=business_id, timezone_name=tz_name)
         ctx = dict(conv.get("context_state") or {})
+        ctx.pop("pending_flow", None)
         slip, reply = self._commit_draft_now(
             draft=draft,
             business_id=business_id,
@@ -3140,6 +3846,7 @@ class VoicePipelineService:
             product=product,
             context_state=ctx,
         )
+        sup_op = slip.pop("_supplier_op", None)
         self.memory.update_context_state(conversation_id=conv["id"], state=ctx)
         res = VoiceTurnResult(
             operation_id=req.operation_id,
@@ -3148,6 +3855,22 @@ class VoicePipelineService:
             reply=reply,
             receipts=[slip],
         )
+        if sup_op:
+            try:
+                rp = res.model_dump()
+                rp["supplier_ops"] = [sup_op]
+                self.db.table("voice_transactions").update(
+                    {"validation_status": "executed", "response_payload": rp}
+                ).eq("business_id", business_id).eq("operation_id", req.operation_id).execute()
+            except Exception:
+                pass
+        else:
+            try:
+                self.db.table("voice_transactions").update({"validation_status": "executed"}).eq(
+                    "business_id", business_id
+                ).eq("operation_id", req.operation_id).execute()
+            except Exception:
+                pass
         self.memory.append_message(
             conversation_id=conv["id"],
             business_id=business_id,

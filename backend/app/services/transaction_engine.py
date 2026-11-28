@@ -965,6 +965,139 @@ class TransactionEngine:
             "new_method": new_method_label,
         }
 
+    def correct_sale_amount(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        sale_id: str,
+        new_total_amount: float,
+        operation_id: str,
+        transaction_date: str,
+    ) -> dict[str, Any]:
+        """Version-correct total rupee amount on an active single-item or combined sale without altering stock."""
+        old_rows = (
+            self.db.table("sales")
+            .select("*")
+            .eq("id", sale_id)
+            .eq("business_id", business_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not old_rows:
+            raise PolicyBlockedError("Previous sale not found to update amount.")
+        old = old_rows[0]
+        old_total = float(old.get("total_amount") or 0)
+        old_paid = float(old.get("paid_amount") or 0)
+        old_status = str(old.get("payment_status") or "paid")
+        old_notes = str(old.get("notes") or "")
+        final_total = max(0.0, round(float(new_total_amount), 2))
+
+        if old_status == "credit":
+            new_paid = 0.0
+            new_status = "credit"
+        elif old_status == "partial":
+            new_paid = min(old_paid, final_total)
+            new_status = "paid" if new_paid >= final_total - 0.009 else ("credit" if new_paid <= 0.009 else "partial")
+        else:
+            new_paid = final_total
+            new_status = "paid"
+
+        old_unpaid = max(0.0, old_total - old_paid)
+        new_unpaid = max(0.0, final_total - new_paid)
+        bal_delta = new_unpaid - old_unpaid
+        if old.get("customer_id") and abs(bal_delta) > 0.009:
+            c_rows = (
+                self.db.table("customers")
+                .select("outstanding_balance")
+                .eq("id", old["customer_id"])
+                .eq("business_id", business_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if c_rows:
+                updated_bal = max(0.0, round(float(c_rows[0]["outstanding_balance"] or 0) + bal_delta, 2))
+                self.db.table("customers").update(
+                    {"outstanding_balance": updated_bal, "updated_at": "now()"}
+                ).eq("id", old["customer_id"]).eq("business_id", business_id).execute()
+
+        tag = (
+            "[UDHAAR]"
+            if new_status == "credit"
+            else ("[ONLINE]" if "[ONLINE]" in old_notes.upper() else ("[BANK]" if "[BANK]" in old_notes.upper() else "[CASH]"))
+        )
+        self.db.table("sales").update({"status": "corrected"}).eq("id", sale_id).eq(
+            "business_id", business_id
+        ).execute()
+
+        new_sale = (
+            self.db.table("sales")
+            .insert(
+                {
+                    "business_id": business_id,
+                    "customer_id": old.get("customer_id"),
+                    "total_amount": final_total,
+                    "paid_amount": new_paid,
+                    "payment_status": new_status,
+                    "transaction_date": transaction_date,
+                    "status": "active",
+                    "parent_sale_id": sale_id,
+                    "operation_id": operation_id,
+                    "notes": f"{tag} Corrected bill amount (₹{old_total:g} -> ₹{final_total:g})",
+                    "created_by": user_id,
+                }
+            )
+            .execute()
+            .data[0]
+        )
+
+        items = (
+            self.db.table("sale_items")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("sale_id", sale_id)
+            .execute()
+            .data
+            or []
+        )
+        if items:
+            raw_sum = sum(float(it.get("line_total") or 0) for it in items)
+            running = 0.0
+            for idx, it in enumerate(items):
+                qty_val = float(it.get("quantity") or 1)
+                if idx == len(items) - 1:
+                    alloc = max(0.0, round(final_total - running, 2))
+                elif raw_sum > 0:
+                    alloc = round((float(it.get("line_total") or 0) / raw_sum) * final_total, 2)
+                    running = round(running + alloc, 2)
+                else:
+                    alloc = round(final_total / len(items), 2)
+                    running = round(running + alloc, 2)
+                eff_unit = round(alloc / qty_val, 2) if qty_val > 0 else float(it.get("unit_price") or 0)
+                self.db.table("sale_items").insert(
+                    {
+                        "business_id": business_id,
+                        "sale_id": new_sale["id"],
+                        "product_id": it["product_id"],
+                        "quantity": qty_val,
+                        "unit": it["unit"],
+                        "unit_price": eff_unit,
+                        "line_total": alloc,
+                    }
+                ).execute()
+
+        return {
+            "new_sale_id": new_sale["id"],
+            "old_total": old_total,
+            "new_total": final_total,
+            "paid_amount": new_paid,
+            "payment_status": new_status,
+        }
+
     def issue_confirmation_token(
         self,
         *,

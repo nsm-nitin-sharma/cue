@@ -1391,3 +1391,55 @@ def test_supplier_credit_split_sale_and_voice_rename():
     assert p_split.operations[0].payment_status == "partial" and p_split.operations[0].paid_amount == 200.0
     p_ren = deterministic_fallback_parse("Coca-Cola ka naam badal ke Coke 750ml kar do", "hinglish")
     assert p_ren.operations[0].intent == "update_product_settings" and p_ren.operations[0].new_name == "Coke 750ml"
+
+    # 5. Whisper 'na hii' amount correction ("700 na hii 100", "700 rupee nahi, 100 rupee") & Tier-3 policy check
+    assert extract_post_negation_number("700 na hii 100") == 100.0
+    p_amt_fix = deterministic_fallback_parse("700 quantity nahi, I said 700 rupee nahi, 100 rupee.", "hinglish")
+    assert p_amt_fix.operations[0].intent == "correct_last_operation"
+    assert p_amt_fix.operations[0].total_amount == 100.0 and p_amt_fix.operations[0].quantity is None
+    assert SecurityPolicyEngine.classify_risk_tier(intent="record_supplier_credit", amount_inr=10000.0) == "tier3"
+
+    # 6. correct_sale_amount proportionally scales line items & preserves stock
+    cb_store = {
+        "products": [
+            {"id": "pm", "business_id": "b1", "name": "Maggi 70g"},
+            {"id": "pc", "business_id": "b1", "name": "Coke 750ml"},
+        ],
+        "customers": [],
+        "inventory": [
+            {"business_id": "b1", "product_id": "pm", "current_quantity": 10.0},
+            {"business_id": "b1", "product_id": "pc", "current_quantity": 10.0},
+        ],
+        "sales": [],
+        "sale_items": [],
+        "inventory_movements": [],
+    }
+    cb_tx = TransactionEngine(_make_rich_db(cb_store))
+    cb_res = cb_tx.record_combined_bill(
+        business_id="b1",
+        user_id="u1",
+        items=[
+            {"product_id": "pm", "product_name": "Maggi 70g", "quantity": 2, "unit": "piece", "unit_price": 100.0},
+            {"product_id": "pc", "product_name": "Coke 750ml", "quantity": 1, "unit": "piece", "unit_price": 500.0},
+        ],
+        customer_id=None,
+        bill_total_amount=700.0,
+        paid_amount=None,
+        payment_status="paid",
+        payment_method="cash",
+        transaction_date="2026-11-28",
+        operation_id="op-700",
+    )
+    ca = cb_tx.correct_sale_amount(
+        business_id="b1",
+        user_id="u1",
+        sale_id=cb_res["sale_id"],
+        new_total_amount=100.0,
+        operation_id="op-100",
+        transaction_date="2026-11-28",
+    )
+    assert ca["old_total"] == 700.0 and ca["new_total"] == 100.0
+    assert cb_store["inventory"][0]["current_quantity"] == 8.0
+    assert cb_store["inventory"][1]["current_quantity"] == 9.0
+    new_items = [it for it in cb_store["sale_items"] if it["sale_id"] == ca["new_sale_id"]]
+    assert round(sum(float(it["line_total"]) for it in new_items), 2) == 100.0
