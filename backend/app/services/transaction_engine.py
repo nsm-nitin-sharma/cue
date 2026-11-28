@@ -1713,6 +1713,40 @@ class TransactionEngine:
                                 reversed_parts.append(f"Return Udhaar ₹{ret_amt:,.0f}")
                         except Exception:
                             pass
+                elif tok.startswith("[RETURN_SALE:") and tok.endswith("]"):
+                    parts = tok[len("[RETURN_SALE:") : -1].split("|")
+                    if len(parts) >= 2:
+                        old_sid, new_sid = parts[0], parts[1]
+                        try:
+                            self.db.table("sales").update({"status": "active"}).eq("id", old_sid).eq(
+                                "business_id", business_id
+                            ).execute()
+                            if new_sid and new_sid != "VOIDED":
+                                self.db.table("sales").update({"status": "voided"}).eq("id", new_sid).eq(
+                                    "business_id", business_id
+                                ).execute()
+                            if len(parts) >= 4 and parts[2]:
+                                rc_id, rc_delta = parts[2], float(parts[3])
+                                c_rows = (
+                                    self.db.table("customers")
+                                    .select("outstanding_balance")
+                                    .eq("id", rc_id)
+                                    .eq("business_id", business_id)
+                                    .limit(1)
+                                    .execute()
+                                    .data
+                                    or []
+                                )
+                                if c_rows and abs(rc_delta) > 0.009:
+                                    self.db.table("customers").update(
+                                        {
+                                            "outstanding_balance": max(0.0, round(float(c_rows[0]["outstanding_balance"] or 0) + rc_delta, 2)),
+                                            "updated_at": "now()",
+                                        }
+                                    ).eq("id", rc_id).eq("business_id", business_id).execute()
+                            reversed_parts.append("Sale Return Reverted")
+                        except Exception:
+                            pass
             if not sales_rows:
                 reversed_parts.append(f"Stock {-delta:+g} {mv['unit']}")
 
@@ -1841,6 +1875,7 @@ class TransactionEngine:
                     "phone": phone.strip(),
                     "area_note": tagged_note,
                     "outstanding_balance": 0.0,
+                    "is_active": True,
                 }
             )
             .execute()
@@ -1917,6 +1952,55 @@ class TransactionEngine:
             "expense_id": exp.get("id"),
         }
 
+    def settle_all_suppliers(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        payment_method: str,
+        transaction_date: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Settle all active [SUPPLIER] payables with outstanding_balance > 0."""
+        rows = (
+            self.db.table("customers")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("is_active", True)
+            .execute()
+            .data
+            or []
+        )
+        due_sups = [
+            r for r in rows
+            if self.SUPPLIER_TAG in str(r.get("area_note") or "").upper()
+            and float(r.get("outstanding_balance") or 0) > 0.009
+        ]
+        settled: list[dict[str, Any]] = []
+        supplier_ops: list[dict[str, Any]] = []
+        total_paid = 0.0
+        for r in due_sups:
+            bal = round(float(r.get("outstanding_balance") or 0), 2)
+            self.record_supplier_payment(
+                business_id=business_id,
+                user_id=user_id,
+                supplier_id=str(r["id"]),
+                supplier_name=str(r["name"]),
+                amount=bal,
+                payment_method=payment_method,
+                transaction_date=transaction_date,
+                operation_id=operation_id,
+            )
+            settled.append({"supplier_id": str(r["id"]), "name": str(r["name"]), "paid_amount": bal})
+            supplier_ops.append({"type": "payment", "supplier_id": str(r["id"]), "amount": bal})
+            total_paid = round(total_paid + bal, 2)
+        return {
+            "settled_count": len(settled),
+            "total_paid": total_paid,
+            "settled_suppliers": settled,
+            "supplier_ops": supplier_ops,
+        }
+
     def record_customer_return(
         self,
         *,
@@ -1932,7 +2016,7 @@ class TransactionEngine:
         transaction_date: str,
         operation_id: str,
     ) -> dict[str, Any]:
-        """Restore returned stock to inventory and adjust Khata balance and/or cash refund expense."""
+        """Restore returned stock to inventory and update matching active sale (or log return refund/Khata)."""
         _, _, before_stock = self._load_product_and_stock(
             business_id=business_id, product_id=product_id, fallback_unit=unit
         )
@@ -1945,31 +2029,211 @@ class TransactionEngine:
         credit_reduced = 0.0
         cash_refund = 0.0
         after_balance: float | None = None
+        return_sale_tag = ""
+        adjusted_sale = False
 
-        if customer_id and refund_method == "credit" and refund_val > 0:
-            c_rows = (
-                self.db.table("customers")
-                .select("outstanding_balance")
-                .eq("id", customer_id)
+        # 1. Try matching an active sale containing this product so Sales, Revenue, Profit & TODAY update immediately
+        try:
+            si_rows = (
+                self.db.table("sale_items")
+                .select("*")
                 .eq("business_id", business_id)
-                .limit(1)
+                .eq("product_id", product_id)
                 .execute()
                 .data
                 or []
             )
-            cur_bal = float(c_rows[0]["outstanding_balance"] or 0) if c_rows else 0.0
-            credit_reduced = round(min(refund_val, cur_bal), 2)
-            after_balance = max(0.0, round(cur_bal - credit_reduced, 2))
-            if credit_reduced > 0:
-                self.db.table("customers").update(
-                    {"outstanding_balance": after_balance, "updated_at": "now()"}
-                ).eq("id", customer_id).eq("business_id", business_id).execute()
-            cash_refund = max(0.0, round(refund_val - credit_reduced, 2))
-        else:
-            cash_refund = refund_val
+            if si_rows:
+                sale_ids = list({str(si["sale_id"]) for si in si_rows if si.get("sale_id")})
+                active_sales = (
+                    self.db.table("sales")
+                    .select("*")
+                    .eq("business_id", business_id)
+                    .eq("status", "active")
+                    .in_("id", sale_ids)
+                    .order("created_at", desc=True)
+                    .execute()
+                    .data
+                    or []
+                )
+                # Prefer customer match, exact total/item match, same day, then most recent sale
+                si_by_sale = {str(si["sale_id"]): si for si in si_rows if si.get("sale_id")}
+                matched_sale = None
+                if active_sales:
+                    def _score_sale(s: dict[str, Any]) -> tuple[int, int, int, int]:
+                        cust_m = 1 if (customer_id and str(s.get("customer_id") or "") == str(customer_id)) else 0
+                        tot_m = 1 if (refund_val > 0 and abs(float(s.get("total_amount") or 0) - refund_val) < 0.01) else 0
+                        si = si_by_sale.get(str(s["id"]))
+                        qty_m = 1 if (si and float(si.get("quantity") or 0) >= float(quantity) - 1e-6) else 0
+                        day_m = 1 if str(s.get("transaction_date") or "") == transaction_date else 0
+                        return (cust_m, tot_m, qty_m, day_m)
+
+                    matched_sale = max(active_sales, key=_score_sale)
+
+                if matched_sale:
+                    all_s_items = (
+                        self.db.table("sale_items")
+                        .select("*")
+                        .eq("business_id", business_id)
+                        .eq("sale_id", matched_sale["id"])
+                        .execute()
+                        .data
+                        or []
+                    )
+                    target_si = next((x for x in all_s_items if str(x.get("product_id")) == str(product_id)), None)
+                    item_qty = float(target_si.get("quantity") or 0) if target_si else 0.0
+                    old_total = float(matched_sale.get("total_amount") or 0)
+                    old_paid = float(matched_sale.get("paid_amount") or 0)
+                    old_unpaid = max(0.0, round(old_total - old_paid, 2))
+                    deduct_from_sale = round(min(refund_val if refund_val > 0 else old_total, old_total), 2)
+                    new_total = max(0.0, round(old_total - deduct_from_sale, 2))
+
+                    sale_cust_id = str(matched_sale.get("customer_id") or customer_id or "") or None
+                    rem_item_qty = round(item_qty - float(quantity), 4)
+                    other_items = [x for x in all_s_items if target_si is None or str(x.get("id") or id(x)) != str(target_si.get("id") or id(target_si))]
+
+                    if new_total <= 0.009 or (rem_item_qty <= 1e-6 and not other_items):
+                        # Full return of this sale -> void the sale cleanly
+                        self.db.table("sales").update({"status": "voided"}).eq("id", matched_sale["id"]).eq(
+                            "business_id", business_id
+                        ).execute()
+                        bal_restore_on_rev = 0.0
+                        if sale_cust_id and old_unpaid > 0:
+                            c_rows = (
+                                self.db.table("customers")
+                                .select("outstanding_balance")
+                                .eq("id", sale_cust_id)
+                                .eq("business_id", business_id)
+                                .limit(1)
+                                .execute()
+                                .data
+                                or []
+                            )
+                            if c_rows:
+                                cur_bal = float(c_rows[0]["outstanding_balance"] or 0)
+                                red = round(min(cur_bal, old_unpaid), 2)
+                                after_balance = max(0.0, round(cur_bal - red, 2))
+                                credit_reduced = red
+                                bal_restore_on_rev = red
+                                self.db.table("customers").update(
+                                    {"outstanding_balance": after_balance, "updated_at": "now()"}
+                                ).eq("id", sale_cust_id).eq("business_id", business_id).execute()
+                        return_sale_tag = f"[RETURN_SALE:{matched_sale['id']}|VOIDED|{sale_cust_id or ''}|{bal_restore_on_rev:g}]"
+                        adjusted_sale = True
+                    else:
+                        # Partial return -> version-correct sale with reduced total & remaining items
+                        if refund_method == "credit":
+                            new_paid = min(old_paid, new_total)
+                        else:
+                            new_paid = max(0.0, round(old_paid - deduct_from_sale, 2))
+                        new_status = "paid" if new_paid >= new_total - 0.009 else ("credit" if new_paid <= 0.009 else "partial")
+                        new_unpaid = max(0.0, round(new_total - new_paid, 2))
+                        bal_delta = round(new_unpaid - old_unpaid, 2)
+                        if sale_cust_id and abs(bal_delta) > 0.009:
+                            c_rows = (
+                                self.db.table("customers")
+                                .select("outstanding_balance")
+                                .eq("id", sale_cust_id)
+                                .eq("business_id", business_id)
+                                .limit(1)
+                                .execute()
+                                .data
+                                or []
+                            )
+                            if c_rows:
+                                cur_bal = float(c_rows[0]["outstanding_balance"] or 0)
+                                after_balance = max(0.0, round(cur_bal + bal_delta, 2))
+                                if bal_delta < 0:
+                                    credit_reduced = round(-bal_delta, 2)
+                                self.db.table("customers").update(
+                                    {"outstanding_balance": after_balance, "updated_at": "now()"}
+                                ).eq("id", sale_cust_id).eq("business_id", business_id).execute()
+
+                        old_notes = str(matched_sale.get("notes") or "")
+                        tag = "[UDHAAR]" if new_status == "credit" else ("[ONLINE]" if "[ONLINE]" in old_notes.upper() else ("[BANK]" if "[BANK]" in old_notes.upper() else "[CASH]"))
+                        self.db.table("sales").update({"status": "corrected"}).eq("id", matched_sale["id"]).eq(
+                            "business_id", business_id
+                        ).execute()
+                        new_sale = (
+                            self.db.table("sales")
+                            .insert(
+                                {
+                                    "business_id": business_id,
+                                    "customer_id": matched_sale.get("customer_id"),
+                                    "total_amount": new_total,
+                                    "paid_amount": new_paid,
+                                    "payment_status": new_status,
+                                    "transaction_date": str(matched_sale.get("transaction_date") or transaction_date),
+                                    "status": "active",
+                                    "parent_sale_id": matched_sale["id"],
+                                    "operation_id": str(matched_sale.get("operation_id") or operation_id),
+                                    "notes": f"{tag} Partial return (-{quantity:g} {product_name})",
+                                    "created_by": user_id,
+                                }
+                            )
+                            .execute()
+                            .data[0]
+                        )
+                        for oi in other_items:
+                            self.db.table("sale_items").insert(
+                                {
+                                    "business_id": business_id,
+                                    "sale_id": new_sale["id"],
+                                    "product_id": oi["product_id"],
+                                    "quantity": float(oi["quantity"]),
+                                    "unit": oi["unit"],
+                                    "unit_price": float(oi["unit_price"]),
+                                    "line_total": float(oi["line_total"]),
+                                }
+                            ).execute()
+                        if target_si and rem_item_qty > 1e-6:
+                            rem_line = max(0.0, round(float(target_si.get("line_total") or 0) - deduct_from_sale, 2))
+                            rem_unit_price = round(rem_line / rem_item_qty, 2) if rem_item_qty > 0 else float(target_si.get("unit_price") or 0)
+                            self.db.table("sale_items").insert(
+                                {
+                                    "business_id": business_id,
+                                    "sale_id": new_sale["id"],
+                                    "product_id": target_si["product_id"],
+                                    "quantity": rem_item_qty,
+                                    "unit": target_si["unit"],
+                                    "unit_price": rem_unit_price,
+                                    "line_total": rem_line,
+                                }
+                            ).execute()
+                        return_sale_tag = f"[RETURN_SALE:{matched_sale['id']}|{new_sale['id']}|{sale_cust_id or ''}|{-bal_delta:g}]"
+                        adjusted_sale = True
+
+                    cash_refund = max(0.0, round(refund_val - deduct_from_sale, 2))
+        except Exception:
+            adjusted_sale = False
+
+        if not adjusted_sale:
+            if customer_id and refund_method == "credit" and refund_val > 0:
+                c_rows = (
+                    self.db.table("customers")
+                    .select("outstanding_balance")
+                    .eq("id", customer_id)
+                    .eq("business_id", business_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                cur_bal = float(c_rows[0]["outstanding_balance"] or 0) if c_rows else 0.0
+                credit_reduced = round(min(refund_val, cur_bal), 2)
+                after_balance = max(0.0, round(cur_bal - credit_reduced, 2))
+                if credit_reduced > 0:
+                    self.db.table("customers").update(
+                        {"outstanding_balance": after_balance, "updated_at": "now()"}
+                    ).eq("id", customer_id).eq("business_id", business_id).execute()
+                cash_refund = max(0.0, round(refund_val - credit_reduced, 2))
+            else:
+                cash_refund = refund_val
 
         note_parts = [f"Customer return: {quantity:g} {unit} {product_name}"]
-        if customer_id and credit_reduced > 0:
+        if return_sale_tag:
+            note_parts.append(return_sale_tag)
+        if not adjusted_sale and customer_id and credit_reduced > 0:
             note_parts.append(f"[RETURN_UDHAAR:{customer_id}|{credit_reduced:g}]")
         self.db.table("inventory_movements").insert(
             {
@@ -2007,6 +2271,7 @@ class TransactionEngine:
             "credit_reduced": credit_reduced,
             "cash_refund": cash_refund,
             "after_balance": after_balance,
+            "sale_adjusted": adjusted_sale,
         }
 
     def record_split_customer_sale(

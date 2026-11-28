@@ -297,7 +297,16 @@ def resolve_product_guarded(
                     query,
                     flags=re.IGNORECASE,
                 ).strip()
-                if stripped_q and stripped_q.lower() != query.lower():
+                stripped_core = _strip_packaging(normalize_text(stripped_q))
+                t_mentioned_brand = bool(
+                    stripped_core
+                    and any(
+                        tok in t_norm or fuzz.partial_ratio(tok, t_norm) >= 82
+                        for tok in stripped_core.split()
+                        if len(tok) >= 3
+                    )
+                )
+                if stripped_q and stripped_q.lower() != query.lower() and t_mentioned_brand:
                     alt = resolve_product(stripped_q, products, aliases)
                     if alt.status == "ambiguous":
                         return alt

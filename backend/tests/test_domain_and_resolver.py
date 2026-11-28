@@ -311,7 +311,8 @@ def test_udhaar_payment_settles_sales_and_includes_in_revenue():
             self._filters.append(("in", k, set(vals)))
             return self
 
-        def order(self, *_a, **_k):
+        def order(self, _col=None, desc: bool = False):
+            self._desc_order = bool(desc)
             return self
 
         def limit(self, *_a, **_k):
@@ -685,7 +686,8 @@ def test_damage_correction_parsing_and_ledger_isolation():
             self._filters.append(("in", k, set(vals)))
             return self
 
-        def order(self, *_a, **_k):
+        def order(self, _col=None, desc: bool = False):
+            self._desc_order = bool(desc)
             return self
 
         def limit(self, *_a, **_k):
@@ -842,6 +844,8 @@ def test_reverse_operation_updates_inventory_for_direct_and_corrected_sales():
                         ok = False
                 if ok:
                     matched.append(r)
+            if self._act == "select" and getattr(self, "_desc_order", False):
+                matched.reverse()
             if self._act == "update":
                 for r in matched:
                     r.update(self._payload)
@@ -1005,7 +1009,8 @@ def _make_rich_db(store):
             self._filters.append(("lte", k, v))
             return self
 
-        def order(self, *_a, **_k):
+        def order(self, _col=None, desc: bool = False):
+            self._desc_order = bool(desc)
             return self
 
         def limit(self, *_a, **_k):
@@ -1033,6 +1038,8 @@ def _make_rich_db(store):
                         ok = False
                 if ok:
                     matched.append(r)
+            if self._act == "select" and getattr(self, "_desc_order", False):
+                matched.reverse()
             if self._act == "update":
                 for r in matched:
                     r.update(self._payload)
@@ -1443,3 +1450,67 @@ def test_supplier_credit_split_sale_and_voice_rename():
     assert cb_store["inventory"][1]["current_quantity"] == 9.0
     new_items = [it for it in cb_store["sale_items"] if it["sale_id"] == ca["new_sale_id"]]
     assert round(sum(float(it["line_total"]) for it in new_items), 2) == 100.0
+
+    # 7. Customer Return updates matching active sale (Sales/Revenue drop!) & Reverse restores it cleanly
+    ret_sale_res = cb_tx.record_sale(
+        business_id="b1",
+        user_id="u1",
+        product_id="pc",
+        product_name="Coke 750ml",
+        quantity=1,
+        unit="piece",
+        unit_price=50.0,
+        payment_status="paid",
+        paid_amount=50.0,
+        customer_id=None,
+        transaction_date="2026-11-28",
+        operation_id="op-coke-sale",
+    )
+    active_coke = next(s for s in cb_store["sales"] if s["id"] == ret_sale_res["sale_id"])
+    assert active_coke["status"] == "active"
+    ret_coke = cb_tx.record_customer_return(
+        business_id="b1",
+        user_id="u1",
+        product_id="pc",
+        product_name="Coke 750ml",
+        quantity=1,
+        unit="piece",
+        refund_amount=50.0,
+        refund_method="cash",
+        customer_id=None,
+        transaction_date="2026-11-28",
+        operation_id="op-coke-ret",
+    )
+    assert ret_coke["sale_adjusted"] is True
+    assert active_coke["status"] == "voided"
+    assert cb_store["inventory"][1]["current_quantity"] == 9.0
+    # Reversing the return restores active_coke back to active & deducts returned stock
+    cb_tx.reverse_operation(
+        business_id="b1",
+        user_id="u1",
+        operation_id="op-coke-ret",
+        reversal_operation_id="rev-coke-ret",
+        transaction_date="2026-11-28",
+    )
+    assert active_coke["status"] == "active"
+    assert cb_store["inventory"][1]["current_quantity"] == 8.0
+
+    # 8. Exact variant resumed after numeric clarification ("40.0") must NOT falsely disambiguate
+    mag_3 = [
+        {"id": "p250", "name": "Maggie Masala 250 Gram"},
+        {"id": "p500", "name": "Maggie Masala 500 Gram"},
+        {"id": "p70", "name": "Maggie Masala 70 Gram"},
+    ]
+    res_resume = resolve_product_guarded("Maggie Masala 500 Gram", "40.0", mag_3, [])
+    assert res_resume.status == "exact" and res_resume.product["id"] == "p500"
+
+    # 9. Settle ALL pending suppliers in one call ("Sare suppliers ke paise wapas kar diye")
+    sup_all = tx.settle_all_suppliers(
+        business_id="b1",
+        user_id="u1",
+        payment_method="cash",
+        transaction_date="2026-11-28",
+        operation_id="op-settle-all",
+    )
+    assert sup_all["settled_count"] == 1 and sup_all["total_paid"] == 3000.0
+    assert sup["outstanding_balance"] == 0.0

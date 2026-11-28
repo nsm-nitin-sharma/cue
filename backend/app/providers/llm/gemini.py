@@ -27,6 +27,7 @@ SECURITY & PRECISION RULES:
      * "Supplier Sharma ji se 5,000 ka maal udhaar aaya" / wholesale credit -> `intent: "record_supplier_credit"`, `customer_query: "Sharma ji"`, `total_amount: 5000`.
      * DISTRIBUTIVE AMOUNTS: If two suppliers or customers share "paanch paanch hazaar" / "5-5 hazaar" / "5000-5000" / "5,000 each" (e.g. "Supplier Rahul aur Supplier Gita, 5-5 hazaar ka udhaar"), emit ONE operation PER person with `total_amount: 5000` each (NEVER concatenate into `55000`!).
      * "Supplier Sharma ji ko 2,000 cash/online diye" -> `intent: "record_supplier_payment"`, `customer_query: "Sharma ji"`, `total_amount: 2000`, `payment_method`.
+     * "Sare suppliers ke paise wapas kar diye" / "Sabhi suppliers ka udhaar chuka diya" / "All suppliers paid" -> `intent: "record_supplier_payment"`, `customer_query: "ALL"`, `total_amount: null`.
      * "Suppliers ko kitna dena baki hai?" -> `intent: "query_business"`, `query_topic: "supplier_balance"`.
    - For Customer Returns / Wapsi:
      * "Customer 2 Maggi wapas kar gaya, 28 rupaye wapas diye" -> `intent: "customer_return"`, `product_query: "Maggi"`, `quantity: 2`, `total_amount: 28`, `payment_method: "cash"` (or `"credit"` if adjusted in Khata, `"upi"` if online).
@@ -246,8 +247,14 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[VoiceOperationItem(intent="query_business", query_topic=topic, product_query=pq_clean, date_range=fallback_range)],
         )
 
-    if re.search(r"\bsupplier\b", lower):
-        sup_m = re.search(r"\bsupplier\s+([a-z0-9\s]+?)\s+(?:se|ko)\b", utterance, re.IGNORECASE)
+    if re.search(r"\b(supplier|suppliers)\b", lower):
+        if re.search(r"\b(sare|saare|sabhi|all)\b", lower) and re.search(r"\b(diye|diya|waapas|wapas|paid|pay|payment|chuka|settled?)\b", lower):
+            pm_sup = "upi" if re.search(r"\b(online|upi|gpay|phonepe|paytm)\b", lower) else "cash"
+            return IntentProposal(
+                detected_language=lang,  # type: ignore[arg-type]
+                operations=[VoiceOperationItem(intent="record_supplier_payment", customer_query="ALL", payment_method=pm_sup)],  # type: ignore[arg-type]
+            )
+        sup_m = re.search(r"\bsuppliers?\s+([a-z0-9\s]+?)\s+(?:se|ko)\b", utterance, re.IGNORECASE)
         sup_name = sup_m.group(1).strip() if sup_m else "Supplier"
         amt_m = re.findall(r"\b(\d+(?:,\d+)*(?:\.\d+)?)\b", utterance)
         sup_amt = float(amt_m[0].replace(",", "")) if amt_m else None

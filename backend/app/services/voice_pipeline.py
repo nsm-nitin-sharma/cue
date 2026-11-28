@@ -544,8 +544,10 @@ class VoicePipelineService:
         if flow_type == "tier3_confirm":
             if any(lower.startswith(w) for w in ("yes", "haan", "ha ", "ha", "ji", "bilkul", "confirm", "ok", "theek")):
                 context_state.pop("pending_flow", None)
+                pending_batch_t3 = context_state.pop("pending_batch_items", [])
+                batch_src_t3 = context_state.pop("pending_batch_source_transcript", None) or reply_text
                 self.memory.update_context_state(conversation_id=conv_id, state=context_state)
-                return self.confirm_tier3(
+                t3_res = self.confirm_tier3(
                     business_id=business_id,
                     user_id=user_id,
                     req=ConfirmOperationRequest(
@@ -554,6 +556,30 @@ class VoicePipelineService:
                         accept=True,
                     ),
                 )
+                if pending_batch_t3:
+                    _, real_aliases, _ = self._load_catalog(business_id)
+                    batch_items = [VoiceOperationItem.model_validate(item) for item in pending_batch_t3]
+                    return await self._execute_operations_batch(
+                        operations=batch_items,
+                        business_id=business_id,
+                        user_id=user_id,
+                        conv_id=conv_id,
+                        today_str=today_str,
+                        tz_name=tz_name,
+                        operation_id=str(uuid.uuid4()),
+                        payload_hash=canonical_payload_hash({"t3_batch_resume": operation_id}),
+                        raw_transcript=batch_src_t3,
+                        language=language,
+                        stt_provider=stt_provider,
+                        stt_confidence=stt_confidence,
+                        products=products,
+                        aliases=real_aliases,
+                        customers=customers,
+                        context_state=context_state,
+                        prefix_receipts=list(t3_res.receipts or []),
+                        prefix_replies=[t3_res.reply] if t3_res.reply else [],
+                    )
+                return t3_res
             if any(lower.startswith(w) for w in ("no", "nahi", "na ", "cancel", "mat", "galat")):
                 context_state.pop("pending_flow", None)
                 msg = "High-value transaction cancel kar diya gaya hai. Koi record change nahi hua."
@@ -728,6 +754,59 @@ class VoicePipelineService:
                 else:
                     draft["payment_method"] = "cash"
                 context_state.pop("pending_flow", None)
+            elif missing_field == "supplier_name" and reply_text.strip():
+                names_raw = [n.strip() for n in re.split(r"(?:,|\band\b|\baur\b)", reply_text, flags=re.IGNORECASE) if n.strip()]
+                context_state.pop("pending_flow", None)
+                sup_intent = str(draft.get("intent") or "record_supplier_payment")
+                sup_amt_v = float(draft.get("total_amount") or 0)
+                pm_v = str(draft.get("payment_method") or "cash")
+                ops_sup: list[VoiceOperationItem] = []
+                for nm in names_raw:
+                    amt_for_nm = sup_amt_v if sup_amt_v > 0 else None
+                    if amt_for_nm is None:
+                        hit_s = next(
+                            (
+                                r for r in customers
+                                if "[SUPPLIER]" in str(r.get("area_note") or "").upper()
+                                and (nm.lower() in str(r.get("name") or "").lower() or str(r.get("name") or "").lower() in nm.lower())
+                            ),
+                            None,
+                        )
+                        if hit_s and float(hit_s.get("outstanding_balance") or 0) > 0:
+                            amt_for_nm = float(hit_s["outstanding_balance"])
+                    ops_sup.append(
+                        VoiceOperationItem(
+                            intent=sup_intent,  # type: ignore[arg-type]
+                            customer_query=nm,
+                            total_amount=amt_for_nm,
+                            payment_method=pm_v,  # type: ignore[arg-type]
+                        )
+                    )
+                pending_batch_s = context_state.pop("pending_batch_items", [])
+                batch_src_s = context_state.pop("pending_batch_source_transcript", None) or reply_text
+                for item in pending_batch_s:
+                    ops_sup.append(VoiceOperationItem.model_validate(item))
+                if ops_sup:
+                    _, real_aliases, _ = self._load_catalog(business_id)
+                    return await self._execute_operations_batch(
+                        operations=ops_sup,
+                        business_id=business_id,
+                        user_id=user_id,
+                        conv_id=conv_id,
+                        today_str=today_str,
+                        tz_name=tz_name,
+                        operation_id=operation_id,
+                        payload_hash=payload_hash,
+                        raw_transcript=batch_src_s,
+                        language=language,
+                        stt_provider=stt_provider,
+                        stt_confidence=stt_confidence,
+                        products=products,
+                        aliases=real_aliases,
+                        customers=customers,
+                        context_state=context_state,
+                    )
+                return None
             else:
                 return None
 
@@ -931,7 +1010,9 @@ class VoicePipelineService:
 
         # Resume any remaining queued batch items if this came from a multi-command utterance!
         pending_batch = context_state.pop("pending_batch_items", [])
+        batch_source_text = context_state.pop("pending_batch_source_transcript", None) or raw_transcript
         if pending_batch:
+            _, real_aliases, _ = self._load_catalog(business_id)
             batch_items = [VoiceOperationItem.model_validate(item) for item in pending_batch]
             follow = await self._execute_operations_batch(
                 operations=batch_items,
@@ -942,12 +1023,12 @@ class VoicePipelineService:
                 tz_name=get_settings().DEFAULT_TIMEZONE,
                 operation_id=str(uuid.uuid4()),
                 payload_hash=canonical_payload_hash({"batch_resume": operation_id}),
-                raw_transcript=raw_transcript,
+                raw_transcript=batch_source_text,
                 language=language,
                 stt_provider=stt_provider,
                 stt_confidence=stt_confidence,
                 products=products,
-                aliases=[],
+                aliases=real_aliases,
                 customers=customers,
                 context_state=context_state,
                 prefix_receipts=[receipt],
@@ -1179,6 +1260,38 @@ class VoicePipelineService:
                 "transactionDate": txn_date,
                 "lines": [{"label": "Catalog Status", "value": "Archived", "tone": "neutral"}],
                 "status": "saved",
+            }
+            return slip, reply
+
+        if intent == "settle_all_suppliers":
+            pm_sup = str(draft.get("payment_method") or "cash")
+            pm_lbl = "Online" if pm_sup == "upi" else ("Bank" if pm_sup == "bank" else "Cash")
+            st = self.tx.settle_all_suppliers(
+                business_id=business_id,
+                user_id=user_id,
+                payment_method=pm_sup,
+                transaction_date=txn_date,
+                operation_id=operation_id,
+            )
+            context_state["last_operation_kind"] = "record_supplier_payment"
+            context_state["last_operation_id"] = operation_id
+            names_paid = ", ".join(s["name"] for s in st["settled_suppliers"]) or "Suppliers"
+            reply = f"Sabhi suppliers ({names_paid}) ka total ₹{st['total_paid']:,.0f} ({pm_lbl}) udhaar settle ho gaya."
+            slip = {
+                "id": f"slip-{operation_id}",
+                "operationId": operation_id,
+                "kind": "expense",
+                "title": f"All Suppliers Settled · {st['settled_count']}",
+                "subtitle": f"Via {pm_lbl}",
+                "transactionDate": txn_date,
+                "amountINR": st["total_paid"],
+                "lines": [
+                    {"label": s["name"], "value": f"Paid ₹{s['paid_amount']:,.0f}", "tone": "sage"}
+                    for s in st["settled_suppliers"]
+                ],
+                "status": "saved",
+                "reversible": True,
+                "_supplier_ops": st["supplier_ops"],
             }
             return slip, reply
 
@@ -2642,6 +2755,7 @@ class VoicePipelineService:
                         remaining = [item.model_dump() for item in operations[idx + 1 :]]
                         if remaining:
                             context_state["pending_batch_items"] = remaining
+                            context_state["pending_batch_source_transcript"] = raw_transcript
                         draft = {
                             "intent": op.intent,
                             "quantity": op.quantity or 1,
@@ -2693,6 +2807,7 @@ class VoicePipelineService:
                         remaining = [item.model_dump() for item in operations[idx + 1 :]]
                         if remaining:
                             context_state["pending_batch_items"] = remaining
+                            context_state["pending_batch_source_transcript"] = raw_transcript
                         draft = {
                             "intent": op.intent,
                             "quantity": op.quantity or 1,
@@ -2747,6 +2862,7 @@ class VoicePipelineService:
                         remaining = [item.model_dump() for item in operations[idx + 1 :]]
                         if remaining:
                             context_state["pending_batch_items"] = remaining
+                            context_state["pending_batch_source_transcript"] = raw_transcript
                         item_name = (op.product_query or "New Product").title()
                         draft = {
                             "intent": op.intent,
@@ -2866,6 +2982,7 @@ class VoicePipelineService:
                     remaining = [item.model_dump() for item in operations[idx + 1 :]]
                     if remaining:
                         context_state["pending_batch_items"] = remaining
+                        context_state["pending_batch_source_transcript"] = raw_transcript
                     draft = {
                         "intent": "inventory_receive",
                         "product_id": str(target_prod["id"]),
@@ -3265,8 +3382,9 @@ class VoicePipelineService:
                     if refund_m == "credit"
                     else ("Online" if refund_m == "upi" else ("Bank" if refund_m == "bank" else "Cash"))
                 )
+                sale_note = " aur Sales update ho gayi" if ret_res.get("sale_adjusted") else ""
                 replies.append(
-                    f"{ret_qty:g} {ret_prod['name']} wapas li gayi, ₹{ret_res['refund_amount']:,.0f} {refund_lbl} adjust hua. Updated stock: {ret_res['after_stock']:g}."
+                    f"{ret_qty:g} {ret_prod['name']} wapas li gayi, ₹{ret_res['refund_amount']:,.0f} {refund_lbl} adjust hua{sale_note}. Updated stock: {ret_res['after_stock']:g}."
                 )
                 ret_lines = [
                     {"label": "Returned Stock", "value": f"+{ret_qty:g} {ret_prod['base_unit']}", "tone": "sage"},
@@ -3290,13 +3408,121 @@ class VoicePipelineService:
 
             elif op.intent in {"record_supplier_credit", "record_supplier_payment"}:
                 sup_name = (op.customer_query or "").strip()
+                is_all_suppliers = bool(
+                    op.intent == "record_supplier_payment"
+                    and (
+                        sup_name.lower() in {"all", "sare", "saare", "sabhi", "every", "everyone", "suppliers"}
+                        or (not sup_name and re.search(r"\b(sare|saare|sabhi|all)\b", raw_transcript, re.IGNORECASE))
+                    )
+                )
+                if is_all_suppliers:
+                    due_sups = [
+                        row for row in customers
+                        if "[SUPPLIER]" in str(row.get("area_note") or "").upper()
+                        and float(row.get("outstanding_balance") or 0) > 0.009
+                    ]
+                    if not due_sups:
+                        replies.append("Abhi kisi bhi supplier ka koi udhaar baki nahi hai.")
+                        continue
+                    total_due = round(sum(float(row.get("outstanding_balance") or 0) for row in due_sups), 2)
+                    pm_all = op.payment_method or "cash"
+                    if SecurityPolicyEngine.classify_risk_tier(intent="record_supplier_payment", amount_inr=total_due) == "tier3":
+                        remaining_all = [item.model_dump() for item in operations[idx + 1 :]]
+                        if remaining_all:
+                            context_state["pending_batch_items"] = remaining_all
+                            context_state["pending_batch_source_transcript"] = raw_transcript
+                        return self._issue_tier3_response(
+                            draft={
+                                "intent": "settle_all_suppliers",
+                                "total_amount": total_due,
+                                "payment_method": pm_all,
+                                "transaction_date": txn_date_str,
+                            },
+                            title=f"Settle All Suppliers ({len(due_sups)})",
+                            description=", ".join(s["name"] for s in due_sups) + f" · ₹{total_due:,.0f}",
+                            total_val=total_due,
+                            business_id=business_id,
+                            user_id=user_id,
+                            conv_id=conv_id,
+                            today_str=today_str,
+                            operation_id=sub_op_id,
+                            payload_hash=payload_hash,
+                            raw_transcript=raw_transcript,
+                            language=language,
+                            stt_provider=stt_provider,
+                            stt_confidence=stt_confidence,
+                            context_state=context_state,
+                            prefix_receipts=receipts,
+                        )
+                    st = self.tx.settle_all_suppliers(
+                        business_id=business_id,
+                        user_id=user_id,
+                        payment_method=pm_all,
+                        transaction_date=txn_date_str,
+                        operation_id=sub_op_id,
+                    )
+                    supplier_ops.extend(st["supplier_ops"])
+                    context_state["last_operation_kind"] = "record_supplier_payment"
+                    context_state["last_operation_id"] = sub_op_id
+                    pm_lbl = "Online" if pm_all == "upi" else ("Bank" if pm_all == "bank" else "Cash")
+                    names_paid = ", ".join(s["name"] for s in st["settled_suppliers"])
+                    replies.append(f"Sabhi suppliers ({names_paid}) ka total ₹{st['total_paid']:,.0f} ({pm_lbl}) udhaar settle ho gaya.")
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "expense",
+                            "title": f"All Suppliers Settled · {st['settled_count']}",
+                            "subtitle": f"Via {pm_lbl}",
+                            "transactionDate": txn_date_str,
+                            "amountINR": st["total_paid"],
+                            "lines": [
+                                {"label": s["name"], "value": f"Paid ₹{s['paid_amount']:,.0f}", "tone": "sage"}
+                                for s in st["settled_suppliers"]
+                            ],
+                            "status": "saved",
+                            "reversible": True,
+                        }
+                    )
+                    continue
+
                 if not sup_name:
+                    remaining_sup = [item.model_dump() for item in operations[idx + 1 :]]
+                    if remaining_sup:
+                        context_state["pending_batch_items"] = remaining_sup
+                        context_state["pending_batch_source_transcript"] = raw_transcript
+                    context_state["pending_flow"] = {
+                        "type": "missing_slot",
+                        "missing_field": "supplier_name",
+                        "draft": {
+                            "intent": op.intent,
+                            "total_amount": op.total_amount,
+                            "payment_method": op.payment_method or "cash",
+                            "transaction_date": txn_date_str,
+                        },
+                    }
+                    sup_cands = [
+                        {
+                            "id": str(r["id"]),
+                            "label": str(r["name"]),
+                            "meta": f"Payable ₹{float(r.get('outstanding_balance') or 0):,.0f}",
+                            "value": str(r["name"]),
+                        }
+                        for r in customers
+                        if "[SUPPLIER]" in str(r.get("area_note") or "").upper()
+                    ]
                     return VoiceTurnResult(
                         operation_id=operation_id,
                         status="needs_clarification",
                         transcript=raw_transcript,
-                        reply="Kis supplier ka naam aur amount record karna hai?",
+                        reply="Kis supplier ka naam record karna hai?",
                         language=language,  # type: ignore[arg-type]
+                        receipts=receipts,
+                        clarification={
+                            "kind": "disambiguate_customer",
+                            "prompt": "Select supplier",
+                            "candidates": sup_cands[:6],
+                        } if sup_cands else None,
                     )
                 sup_amt = float(op.total_amount or op.paid_amount or op.unit_price or 0)
                 if sup_amt <= 0:
@@ -3847,6 +4073,7 @@ class VoicePipelineService:
             context_state=ctx,
         )
         sup_op = slip.pop("_supplier_op", None)
+        sup_ops_list = slip.pop("_supplier_ops", None) or ([sup_op] if sup_op else [])
         self.memory.update_context_state(conversation_id=conv["id"], state=ctx)
         res = VoiceTurnResult(
             operation_id=req.operation_id,
@@ -3855,10 +4082,10 @@ class VoicePipelineService:
             reply=reply,
             receipts=[slip],
         )
-        if sup_op:
+        if sup_ops_list:
             try:
                 rp = res.model_dump()
-                rp["supplier_ops"] = [sup_op]
+                rp["supplier_ops"] = sup_ops_list
                 self.db.table("voice_transactions").update(
                     {"validation_status": "executed", "response_payload": rp}
                 ).eq("business_id", business_id).eq("operation_id", req.operation_id).execute()
