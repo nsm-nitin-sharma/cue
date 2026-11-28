@@ -1590,3 +1590,23 @@ def test_supplier_credit_split_sale_and_voice_rename():
     assert corr_split["paid_amount"] == 110.0 and corr_split["credit_amount"] == 55.0
     assert chini_store["inventory"][0]["current_quantity"] == 12.0
     assert chini_store["customers"][0]["outstanding_balance"] == 55.0
+
+    # 11. Selective multi-supplier full payoff ("Gita and Rahul dono ka udhaar waapas kar diya")
+    gita_sup, _ = tx.find_or_create_supplier(business_id="b1", name="Gita")
+    rahul_sup, _ = tx.find_or_create_supplier(business_id="b1", name="Rahul")
+    other_sup, _ = tx.find_or_create_supplier(business_id="b1", name="Verma")
+    tx.record_supplier_credit(business_id="b1", supplier_id=gita_sup["id"], amount=55000.0)
+    tx.record_supplier_credit(business_id="b1", supplier_id=rahul_sup["id"], amount=2900.0)
+    tx.record_supplier_credit(business_id="b1", supplier_id=other_sup["id"], amount=1500.0)
+    st_sel = tx.settle_all_suppliers(
+        business_id="b1",
+        user_id="u1",
+        payment_method="cash",
+        transaction_date="2026-11-28",
+        operation_id="op-gita-rahul",
+        supplier_ids=[gita_sup["id"], rahul_sup["id"]],
+    )
+    assert st_sel["settled_count"] == 2 and st_sel["total_paid"] == 57900.0
+    assert gita_sup["outstanding_balance"] == 0.0
+    assert rahul_sup["outstanding_balance"] == 0.0
+    assert other_sup["outstanding_balance"] == 1500.0

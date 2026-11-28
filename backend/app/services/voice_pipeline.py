@@ -327,7 +327,15 @@ class VoicePipelineService:
             timezone_name=tz_name,
         )
         catalog_hints = [{"name": p["name"], "unit": p["base_unit"], "stock": p["current_stock"]} for p in products]
-        customer_hints = [{"name": c["name"], "area": c["area_note"], "due": float(c["outstanding_balance"])} for c in customers]
+        customer_hints = [
+            {
+                "name": c["name"],
+                "area": str(c.get("area_note") or "").replace("[SUPPLIER]", "").strip(),
+                "type": "supplier" if "[SUPPLIER]" in str(c.get("area_note") or "").upper() else "customer",
+                "due": float(c["outstanding_balance"]),
+            }
+            for c in customers
+        ]
 
         llm = get_llm_provider()
         proposal = await llm.parse_utterance(
@@ -1272,6 +1280,7 @@ class VoicePipelineService:
                 payment_method=pm_sup,
                 transaction_date=txn_date,
                 operation_id=operation_id,
+                supplier_ids=draft.get("supplier_ids"),
             )
             context_state["last_operation_kind"] = "record_supplier_payment"
             context_state["last_operation_id"] = operation_id
@@ -1652,7 +1661,7 @@ class VoicePipelineService:
         replies: list[str] = list(prefix_replies or [])
         supplier_ops: list[dict[str, Any]] = []
         processed_indices: set[int] = set()
-        non_supplier_customers, _ = self._split_customers_and_suppliers(customers)
+        non_supplier_customers, suppliers_list = self._split_customers_and_suppliers(customers)
 
         for idx, op in enumerate(operations):
             if idx in processed_indices:
@@ -3470,11 +3479,173 @@ class VoicePipelineService:
 
             elif op.intent in {"record_supplier_credit", "record_supplier_payment"}:
                 sup_name = (op.customer_query or "").strip()
+                payoff_cue = bool(
+                    re.search(
+                        r"\b(wapas|waapas|vahapas|baapas|chuka|settled?|clear|paid\s+back|dee?\s*diyae?|de\s+diya)\b",
+                        raw_transcript,
+                        re.IGNORECASE,
+                    )
+                )
+                # Handle single-op compound names like customer_query="Gita and Rahul"
+                if (op.intent == "record_supplier_payment" or payoff_cue) and re.search(r"(?:,|\band\b|\baur\b)", sup_name, re.IGNORECASE):
+                    split_names = [p.strip() for p in re.split(r"(?:,|\band\b|\baur\b)", sup_name, flags=re.IGNORECASE) if p.strip()]
+                    multi_sups = []
+                    for nm in split_names:
+                        sr = resolve_customer(nm, suppliers_list)
+                        if sr.status == "exact" and sr.customer and float(sr.customer.get("outstanding_balance") or 0) > 0.009:
+                            multi_sups.append(sr.customer)
+                    if multi_sups:
+                        total_ms = round(sum(float(s.get("outstanding_balance") or 0) for s in multi_sups), 2)
+                        pm_ms = op.payment_method or "cash"
+                        ms_ids = [str(s["id"]) for s in multi_sups]
+                        if SecurityPolicyEngine.classify_risk_tier(intent="record_supplier_payment", amount_inr=total_ms) == "tier3":
+                            return self._issue_tier3_response(
+                                draft={
+                                    "intent": "settle_all_suppliers",
+                                    "supplier_ids": ms_ids,
+                                    "total_amount": total_ms,
+                                    "payment_method": pm_ms,
+                                    "transaction_date": txn_date_str,
+                                },
+                                title=f"Settle Suppliers ({len(multi_sups)})",
+                                description=", ".join(s["name"] for s in multi_sups) + f" · ₹{total_ms:,.0f}",
+                                total_val=total_ms,
+                                business_id=business_id,
+                                user_id=user_id,
+                                conv_id=conv_id,
+                                today_str=today_str,
+                                operation_id=sub_op_id,
+                                payload_hash=payload_hash,
+                                raw_transcript=raw_transcript,
+                                language=language,
+                                stt_provider=stt_provider,
+                                stt_confidence=stt_confidence,
+                                context_state=context_state,
+                                prefix_receipts=receipts,
+                            )
+                        st_ms = self.tx.settle_all_suppliers(
+                            business_id=business_id,
+                            user_id=user_id,
+                            payment_method=pm_ms,
+                            transaction_date=txn_date_str,
+                            operation_id=sub_op_id,
+                            supplier_ids=ms_ids,
+                        )
+                        supplier_ops.extend(st_ms["supplier_ops"])
+                        pm_lbl = "Online" if pm_ms == "upi" else ("Bank" if pm_ms == "bank" else "Cash")
+                        names_paid = ", ".join(s["name"] for s in st_ms["settled_suppliers"])
+                        replies.append(f"Suppliers ({names_paid}) ka total ₹{st_ms['total_paid']:,.0f} ({pm_lbl}) udhaar settle ho gaya.")
+                        receipts.append(
+                            {
+                                "id": f"slip-{sub_op_id}",
+                                "operationId": sub_op_id,
+                                "kind": "expense",
+                                "title": f"Suppliers Settled · {st_ms['settled_count']}",
+                                "subtitle": f"Via {pm_lbl}",
+                                "transactionDate": txn_date_str,
+                                "amountINR": st_ms["total_paid"],
+                                "lines": [
+                                    {"label": s["name"], "value": f"Paid ₹{s['paid_amount']:,.0f}", "tone": "sage"}
+                                    for s in st_ms["settled_suppliers"]
+                                ],
+                                "status": "saved",
+                                "reversible": True,
+                            }
+                        )
+                        continue
+                # Bundle multi-supplier full payoff ("Gita and Rahul dono ka udhaar waapas kar diya")
+                sup_group_indices = [
+                    j for j in range(idx, len(operations))
+                    if j not in processed_indices
+                    and operations[j].intent in {"record_supplier_payment", "record_supplier_credit"}
+                    and (operations[j].intent == "record_supplier_payment" or payoff_cue)
+                    and operations[j].customer_query
+                    and operations[j].total_amount is None
+                ]
+                if len(sup_group_indices) >= 2:
+                    matched_sups: list[dict[str, Any]] = []
+                    seen_sids: set[str] = set()
+                    for j in sup_group_indices:
+                        q_s = str(operations[j].customer_query or "").strip()
+                        sres = resolve_customer(q_s, suppliers_list)
+                        if sres.status == "exact" and sres.customer and float(sres.customer.get("outstanding_balance") or 0) > 0.009:
+                            sid = str(sres.customer["id"])
+                            if sid not in seen_sids:
+                                seen_sids.add(sid)
+                                matched_sups.append(sres.customer)
+                    if matched_sups:
+                        total_grp_due = round(sum(float(s.get("outstanding_balance") or 0) for s in matched_sups), 2)
+                        pm_grp = op.payment_method or "cash"
+                        target_ids = [str(s["id"]) for s in matched_sups]
+                        for j in sup_group_indices:
+                            processed_indices.add(j)
+                        if SecurityPolicyEngine.classify_risk_tier(intent="record_supplier_payment", amount_inr=total_grp_due) == "tier3":
+                            rem_grp = [item.model_dump() for k, item in enumerate(operations[idx + 1:], start=idx + 1) if k not in processed_indices]
+                            if rem_grp:
+                                context_state["pending_batch_items"] = rem_grp
+                                context_state["pending_batch_source_transcript"] = raw_transcript
+                            return self._issue_tier3_response(
+                                draft={
+                                    "intent": "settle_all_suppliers",
+                                    "supplier_ids": target_ids,
+                                    "total_amount": total_grp_due,
+                                    "payment_method": pm_grp,
+                                    "transaction_date": txn_date_str,
+                                },
+                                title=f"Settle Suppliers ({len(matched_sups)})",
+                                description=", ".join(s["name"] for s in matched_sups) + f" · ₹{total_grp_due:,.0f}",
+                                total_val=total_grp_due,
+                                business_id=business_id,
+                                user_id=user_id,
+                                conv_id=conv_id,
+                                today_str=today_str,
+                                operation_id=sub_op_id,
+                                payload_hash=payload_hash,
+                                raw_transcript=raw_transcript,
+                                language=language,
+                                stt_provider=stt_provider,
+                                stt_confidence=stt_confidence,
+                                context_state=context_state,
+                                prefix_receipts=receipts,
+                            )
+                        st_g = self.tx.settle_all_suppliers(
+                            business_id=business_id,
+                            user_id=user_id,
+                            payment_method=pm_grp,
+                            transaction_date=txn_date_str,
+                            operation_id=sub_op_id,
+                            supplier_ids=target_ids,
+                        )
+                        supplier_ops.extend(st_g["supplier_ops"])
+                        context_state["last_operation_kind"] = "record_supplier_payment"
+                        context_state["last_operation_id"] = sub_op_id
+                        pm_lbl = "Online" if pm_grp == "upi" else ("Bank" if pm_grp == "bank" else "Cash")
+                        names_paid = ", ".join(s["name"] for s in st_g["settled_suppliers"])
+                        replies.append(f"Suppliers ({names_paid}) ka total ₹{st_g['total_paid']:,.0f} ({pm_lbl}) udhaar settle ho gaya.")
+                        receipts.append(
+                            {
+                                "id": f"slip-{sub_op_id}",
+                                "operationId": sub_op_id,
+                                "kind": "expense",
+                                "title": f"Suppliers Settled · {st_g['settled_count']}",
+                                "subtitle": f"Via {pm_lbl}",
+                                "transactionDate": txn_date_str,
+                                "amountINR": st_g["total_paid"],
+                                "lines": [
+                                    {"label": s["name"], "value": f"Paid ₹{s['paid_amount']:,.0f}", "tone": "sage"}
+                                    for s in st_g["settled_suppliers"]
+                                ],
+                                "status": "saved",
+                                "reversible": True,
+                            }
+                        )
+                        continue
+
                 is_all_suppliers = bool(
-                    op.intent == "record_supplier_payment"
+                    (op.intent == "record_supplier_payment" or payoff_cue)
                     and (
-                        sup_name.lower() in {"all", "sare", "saare", "sabhi", "every", "everyone", "suppliers"}
-                        or (not sup_name and re.search(r"\b(sare|saare|sabhi|all)\b", raw_transcript, re.IGNORECASE))
+                        sup_name.lower() in {"all", "sare", "saare", "sabhi", "every", "everyone", "suppliers", "dono", "both"}
+                        or (not sup_name and re.search(r"\b(sare|saare|sabhi|all|dono)\b", raw_transcript, re.IGNORECASE))
                     )
                 )
                 if is_all_suppliers:
@@ -3586,7 +3757,18 @@ class VoicePipelineService:
                             "candidates": sup_cands[:6],
                         } if sup_cands else None,
                     )
+                sup_row, created_new = self.tx.find_or_create_supplier(business_id=business_id, name=sup_name)
+                if created_new:
+                    customers.append(sup_row)
+                    suppliers_list.append(sup_row)
+                effective_sup_intent = (
+                    "record_supplier_payment"
+                    if (op.intent == "record_supplier_payment" or (payoff_cue and float(sup_row.get("outstanding_balance") or 0) > 0.009))
+                    else "record_supplier_credit"
+                )
                 sup_amt = float(op.total_amount or op.paid_amount or op.unit_price or 0)
+                if effective_sup_intent == "record_supplier_payment" and sup_amt <= 0 and float(sup_row.get("outstanding_balance") or 0) > 0.009:
+                    sup_amt = round(float(sup_row["outstanding_balance"]), 2)
                 if sup_amt <= 0:
                     return VoiceTurnResult(
                         operation_id=operation_id,
@@ -3595,13 +3777,10 @@ class VoicePipelineService:
                         reply=f"Supplier {sup_name} ke liye kitne rupaye record karne hain?",
                         language=language,  # type: ignore[arg-type]
                     )
-                sup_row, created_new = self.tx.find_or_create_supplier(business_id=business_id, name=sup_name)
-                if created_new:
-                    customers.append(sup_row)
-                if SecurityPolicyEngine.classify_risk_tier(intent=op.intent, amount_inr=sup_amt) == "tier3":
+                if SecurityPolicyEngine.classify_risk_tier(intent=effective_sup_intent, amount_inr=sup_amt) == "tier3":
                     return self._issue_tier3_response(
                         draft={
-                            "intent": op.intent,
+                            "intent": effective_sup_intent,
                             "supplier_id": str(sup_row["id"]),
                             "supplier_name": str(sup_row["name"]),
                             "total_amount": sup_amt,
@@ -3610,7 +3789,7 @@ class VoicePipelineService:
                         },
                         title=(
                             f"High-Value Supplier Credit · {sup_row['name']}"
-                            if op.intent == "record_supplier_credit"
+                            if effective_sup_intent == "record_supplier_credit"
                             else f"High-Value Supplier Payment · {sup_row['name']}"
                         ),
                         description=f"Supplier {sup_row['name']} · ₹{sup_amt:,.0f}",
@@ -3628,7 +3807,7 @@ class VoicePipelineService:
                         context_state=context_state,
                         prefix_receipts=receipts,
                     )
-                if op.intent == "record_supplier_credit":
+                if effective_sup_intent == "record_supplier_credit":
                     sc = self.tx.record_supplier_credit(
                         business_id=business_id,
                         supplier_id=str(sup_row["id"]),
@@ -3719,7 +3898,102 @@ class VoicePipelineService:
                         }
                     )
                 else:
+                    payoff_cue_c = bool(
+                        re.search(
+                            r"\b(wapas|waapas|vahapas|baapas|chuka|settled?|clear|paid\s+back|dee?\s*diyae?|de\s+diya)\b",
+                            raw_transcript,
+                            re.IGNORECASE,
+                        )
+                    )
                     cres = resolve_customer(op.customer_query, non_supplier_customers)
+                    # If user says "Gita and Rahul dono ka udhaar waapas kar diya" (and Gemini routed to customer_payment/udhaar),
+                    # check if named party has a pending [SUPPLIER] payable instead of an unpaid Customer balance!
+                    if op.intent in {"record_customer_payment", "record_udhaar_credit"} and op.customer_query:
+                        cust_due_val = float(cres.customer.get("outstanding_balance") or 0) if (cres.status == "exact" and cres.customer) else 0.0
+                        sres_fallback = resolve_customer(op.customer_query, suppliers_list)
+                        if (
+                            sres_fallback.status == "exact"
+                            and sres_fallback.customer
+                            and float(sres_fallback.customer.get("outstanding_balance") or 0) > 0.009
+                            and (cres.status != "exact" or (cust_due_val <= 0.009 and (op.intent == "record_customer_payment" or payoff_cue_c)))
+                        ):
+                            # Gather all matching supplier payoff ops in this batch
+                            fb_indices = [
+                                j for j in range(idx, len(operations))
+                                if j not in processed_indices
+                                and operations[j].intent in {"record_customer_payment", "record_udhaar_credit", "record_supplier_payment"}
+                                and operations[j].customer_query
+                            ]
+                            fb_sups: list[dict[str, Any]] = []
+                            seen_fb: set[str] = set()
+                            for j in fb_indices:
+                                sr = resolve_customer(str(operations[j].customer_query or ""), suppliers_list)
+                                if sr.status == "exact" and sr.customer and float(sr.customer.get("outstanding_balance") or 0) > 0.009:
+                                    if str(sr.customer["id"]) not in seen_fb:
+                                        seen_fb.add(str(sr.customer["id"]))
+                                        fb_sups.append(sr.customer)
+                                        processed_indices.add(j)
+                            if fb_sups:
+                                total_fb_due = round(sum(float(s.get("outstanding_balance") or 0) for s in fb_sups), 2)
+                                pm_fb = op.payment_method or "cash"
+                                fb_ids = [str(s["id"]) for s in fb_sups]
+                                if SecurityPolicyEngine.classify_risk_tier(intent="record_supplier_payment", amount_inr=total_fb_due) == "tier3":
+                                    return self._issue_tier3_response(
+                                        draft={
+                                            "intent": "settle_all_suppliers",
+                                            "supplier_ids": fb_ids,
+                                            "total_amount": total_fb_due,
+                                            "payment_method": pm_fb,
+                                            "transaction_date": txn_date_str,
+                                        },
+                                        title=f"Settle Suppliers ({len(fb_sups)})",
+                                        description=", ".join(s["name"] for s in fb_sups) + f" · ₹{total_fb_due:,.0f}",
+                                        total_val=total_fb_due,
+                                        business_id=business_id,
+                                        user_id=user_id,
+                                        conv_id=conv_id,
+                                        today_str=today_str,
+                                        operation_id=sub_op_id,
+                                        payload_hash=payload_hash,
+                                        raw_transcript=raw_transcript,
+                                        language=language,
+                                        stt_provider=stt_provider,
+                                        stt_confidence=stt_confidence,
+                                        context_state=context_state,
+                                        prefix_receipts=receipts,
+                                    )
+                                st_fb = self.tx.settle_all_suppliers(
+                                    business_id=business_id,
+                                    user_id=user_id,
+                                    payment_method=pm_fb,
+                                    transaction_date=txn_date_str,
+                                    operation_id=sub_op_id,
+                                    supplier_ids=fb_ids,
+                                )
+                                supplier_ops.extend(st_fb["supplier_ops"])
+                                context_state["last_operation_kind"] = "record_supplier_payment"
+                                context_state["last_operation_id"] = sub_op_id
+                                pm_lbl = "Online" if pm_fb == "upi" else ("Bank" if pm_fb == "bank" else "Cash")
+                                names_paid = ", ".join(s["name"] for s in st_fb["settled_suppliers"])
+                                replies.append(f"Suppliers ({names_paid}) ka total ₹{st_fb['total_paid']:,.0f} ({pm_lbl}) udhaar settle ho gaya.")
+                                receipts.append(
+                                    {
+                                        "id": f"slip-{sub_op_id}",
+                                        "operationId": sub_op_id,
+                                        "kind": "expense",
+                                        "title": f"Suppliers Settled · {st_fb['settled_count']}",
+                                        "subtitle": f"Via {pm_lbl}",
+                                        "transactionDate": txn_date_str,
+                                        "amountINR": st_fb["total_paid"],
+                                        "lines": [
+                                            {"label": s["name"], "value": f"Paid ₹{s['paid_amount']:,.0f}", "tone": "sage"}
+                                            for s in st_fb["settled_suppliers"]
+                                        ],
+                                        "status": "saved",
+                                        "reversible": True,
+                                    }
+                                )
+                                continue
                     if cres.status == "ambiguous" and cres.candidates:
                         names = " ya ".join(c["name"] for c in cres.candidates)
                         msg = f"Khata mein {len(cres.candidates)} {op.customer_query} hain ({names}). Kaunse customer ke liye?"
@@ -3849,6 +4123,10 @@ class VoicePipelineService:
                         )
                     elif op.intent == "record_customer_payment":
                         amt = float(op.total_amount or op.paid_amount or op.unit_price or 0)
+                        if amt <= 0 and float(cust.get("outstanding_balance") or 0) > 0.009 and re.search(
+                            r"\b(pura|poora|sab|all|wapas|waapas|chuka|settle|clear|dono|full)\b", raw_transcript, re.IGNORECASE
+                        ):
+                            amt = round(float(cust["outstanding_balance"]), 2)
                         if amt <= 0:
                             return VoiceTurnResult(
                                 operation_id=operation_id,

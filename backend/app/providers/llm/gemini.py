@@ -28,6 +28,7 @@ SECURITY & PRECISION RULES:
      * DISTRIBUTIVE AMOUNTS: If two suppliers or customers share "paanch paanch hazaar" / "5-5 hazaar" / "5000-5000" / "5,000 each" (e.g. "Supplier Rahul aur Supplier Gita, 5-5 hazaar ka udhaar"), emit ONE operation PER person with `total_amount: 5000` each (NEVER concatenate into `55000`!).
      * "Supplier Sharma ji ko 2,000 cash/online diye" -> `intent: "record_supplier_payment"`, `customer_query: "Sharma ji"`, `total_amount: 2000`, `payment_method`.
      * "Sare suppliers ke paise wapas kar diye" / "Sabhi suppliers ka udhaar chuka diya" / "All suppliers paid" -> `intent: "record_supplier_payment"`, `customer_query: "ALL"`, `total_amount: null`.
+     * FULL PAYOFF OF NAMED SUPPLIER(S): Check `customer_hints` (`"type": "supplier"`). If the user says "<Name> ka udhaar wapas kar diya" or "Gita and Rahul dono ka udhaar waapas kar diya" (even without saying the word "Supplier" or stating rupee numbers!), emit `intent: "record_supplier_payment"` for each named supplier (`total_amount: null` to settle full balance). NEVER use `record_supplier_credit` or `record_udhaar_credit` when the user says `wapas kar diya` / `chuka diya` / `paid back`!
      * "Suppliers ko kitna dena baki hai?" -> `intent: "query_business"`, `query_topic: "supplier_balance"`.
    - For Customer Returns / Wapsi:
      * "Customer 2 Maggi wapas kar gaya, 28 rupaye wapas diye" -> `intent: "customer_return"`, `product_query: "Maggi"`, `quantity: 2`, `total_amount: 28`, `payment_method: "cash"` (or `"credit"` if adjusted in Khata, `"upi"` if online).
@@ -249,7 +250,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         )
 
     if re.search(r"\b(supplier|suppliers)\b", lower):
-        if re.search(r"\b(sare|saare|sabhi|all)\b", lower) and re.search(r"\b(diye|diya|waapas|wapas|paid|pay|payment|chuka|settled?)\b", lower):
+        if re.search(r"\b(sare|saare|sabhi|all)\b", lower) and re.search(r"\b(diye|diya|waapas|wapas|vahapas|baapas|paid|pay|payment|chuka|settled?)\b", lower):
             pm_sup = "upi" if re.search(r"\b(online|upi|gpay|phonepe|paytm)\b", lower) else "cash"
             return IntentProposal(
                 detected_language=lang,  # type: ignore[arg-type]
@@ -259,16 +260,16 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         sup_name = sup_m.group(1).strip() if sup_m else "Supplier"
         amt_m = re.findall(r"\b(\d+(?:,\d+)*(?:\.\d+)?)\b", utterance)
         sup_amt = float(amt_m[0].replace(",", "")) if amt_m else None
-        if re.search(r"\b(udhaar|maal\s+aaya|aaya|credit)\b", lower) and not re.search(r"\b(diye|diya|paid|payment)\b", lower):
-            return IntentProposal(
-                detected_language=lang,  # type: ignore[arg-type]
-                operations=[VoiceOperationItem(intent="record_supplier_credit", customer_query=sup_name, total_amount=sup_amt)],
-            )
-        if re.search(r"\b(diye|diya|paid|payment|bhara)\b", lower):
+        if re.search(r"\b(diye|diya|waapas|wapas|vahapas|baapas|paid|payment|bhara|chuka)\b", lower):
             pm_sup = "upi" if re.search(r"\b(online|upi|gpay|phonepe|paytm)\b", lower) else "cash"
             return IntentProposal(
                 detected_language=lang,  # type: ignore[arg-type]
                 operations=[VoiceOperationItem(intent="record_supplier_payment", customer_query=sup_name, total_amount=sup_amt, payment_method=pm_sup)],  # type: ignore[arg-type]
+            )
+        if re.search(r"\b(udhaar|maal\s+aaya|aaya|credit)\b", lower):
+            return IntentProposal(
+                detected_language=lang,  # type: ignore[arg-type]
+                operations=[VoiceOperationItem(intent="record_supplier_credit", customer_query=sup_name, total_amount=sup_amt)],
             )
 
     if re.search(r"\b(wapas\s+kar|wapas\s+de|wapas\s+le\s+aaya|return)\b", lower) and not re.search(r"\b(undo|cancel)\b", lower):

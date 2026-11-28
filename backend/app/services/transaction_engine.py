@@ -2017,8 +2017,9 @@ class TransactionEngine:
         payment_method: str,
         transaction_date: str,
         operation_id: str,
+        supplier_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Settle all active [SUPPLIER] payables with outstanding_balance > 0."""
+        """Settle active [SUPPLIER] payables (all pending or specific supplier_ids) with outstanding_balance > 0."""
         rows = (
             self.db.table("customers")
             .select("*")
@@ -2028,10 +2029,12 @@ class TransactionEngine:
             .data
             or []
         )
+        id_filter = {str(s) for s in supplier_ids} if supplier_ids else None
         due_sups = [
             r for r in rows
             if self.SUPPLIER_TAG in str(r.get("area_note") or "").upper()
             and float(r.get("outstanding_balance") or 0) > 0.009
+            and (id_filter is None or str(r["id"]) in id_filter)
         ]
         settled: list[dict[str, Any]] = []
         supplier_ops: list[dict[str, Any]] = []
