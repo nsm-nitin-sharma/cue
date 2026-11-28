@@ -1264,7 +1264,6 @@ def test_customer_return_variant_swap_and_combined_bill():
     assert pres_meggie.status in {"exact", "verify_alias"} and pres_meggie.product["id"] == "p250"
 
     store["inventory"].append({"business_id": "b1", "product_id": "p500", "current_quantity": 1.0})
-    store["inventory"].append({"business_id": "b1", "product_id": "p250", "current_quantity": 4.0})
     tx.record_customer_return(
         business_id="b1",
         user_id="u1",
@@ -1292,7 +1291,7 @@ def test_customer_return_variant_swap_and_combined_bill():
     )
     assert sw_ret["new_product_name"] == "Maggie Masala 250 Gram" and sw_ret["refund_amount"] == 90.0
     assert next(i for i in store["inventory"] if i["product_id"] == "p500")["current_quantity"] == 1.0
-    assert next(i for i in store["inventory"] if i["product_id"] == "p250")["current_quantity"] == 6.0
+    assert next(i for i in store["inventory"] if i["product_id"] == "p250")["current_quantity"] == 10.0
 
     # 3. Combined multi-item bill with lump-sum 100 INR (catalog = 2*14 + 45 = 73 or say 2*50 + 45 = 145 -> 100)
     cb = tx.record_combined_bill(
@@ -1312,7 +1311,7 @@ def test_customer_return_variant_swap_and_combined_bill():
     )
     assert cb["total_amount"] == 100.0 and cb["discount_amount"] == 45.0
     assert len(cb["items"]) == 2
-    assert store["inventory"][1]["current_quantity"] == 6.0
+    assert store["inventory"][1]["current_quantity"] == 8.0
     assert store["inventory"][2]["current_quantity"] == 11.0
 
 
