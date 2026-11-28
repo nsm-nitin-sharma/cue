@@ -142,8 +142,15 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         elif re.search(r"\bbank\b", lower):
             pm = "bank"
         pstat = "credit" if re.search(r"\budhaar\b", lower) and not re.search(r"\budhaar\s+nahi\b", lower) else None
-        is_loss_or_stock = bool(re.search(r"\b(damage|damaged|demis|kharab|toot|expire|expired|aayi|aaya|receive|bik|biki|sold)\b", lower))
-        if (pm is not None or pstat is not None) and qty is None:
+        is_loss_or_stock = bool(re.search(r"\b(damage|damaged|demis|kharab|toot|expire|expired|aayi|aaya|receive|bik|biki|sold|wapas|return)\b", lower))
+        has_pack_unit = bool(re.search(r"\b\d+\s*(?:g|gm|gms|grams?|ml|mls|kg|kilo|ltr|litres?|liters?)\b", lower))
+        neg_prod_match = re.search(
+            r"(?:nahi|nahin|not|ki\s+jagah|instead\s+of)\s+([a-z0-9\s]+?)(?:\s+wali|\s+thi|\s+tha|[.,]|$)",
+            utterance,
+            re.IGNORECASE,
+        )
+        swap_pq = neg_prod_match.group(1).strip() if (has_pack_unit and neg_prod_match) else None
+        if (pm is not None or pstat is not None) and qty is None and not swap_pq:
             return IntentProposal(
                 detected_language=lang,  # type: ignore[arg-type]
                 operations=[
@@ -160,8 +167,9 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
             operations=[
                 VoiceOperationItem(
                     intent="correct_last_operation",
-                    quantity=qty,
-                    total_amount=None if is_loss_or_stock else qty,
+                    product_query=swap_pq,
+                    quantity=None if has_pack_unit else qty,
+                    total_amount=None if (is_loss_or_stock or has_pack_unit) else qty,
                     payment_method=pm,  # type: ignore[arg-type]
                     uses_prior_context=True,
                 )

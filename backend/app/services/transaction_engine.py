@@ -2257,3 +2257,224 @@ class TransactionEngine:
             "new_operation_id": operation_id,
         }
 
+    def swap_last_return_variant(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        old_operation_id: str,
+        new_product_id: str,
+        new_product_name: str,
+        new_unit: str,
+        new_unit_price: float,
+        new_quantity: float | None = None,
+        transaction_date: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Atomically reverse the last mistaken customer return SKU and re-record on the corrected SKU."""
+        mvs = (
+            self.db.table("inventory_movements")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("operation_id", old_operation_id)
+            .eq("reference_type", "customer_return")
+            .execute()
+            .data
+            or []
+        )
+        if not mvs:
+            raise PolicyBlockedError("Previous customer return not found to swap variant.")
+        mv = mvs[0]
+        old_qty = abs(float(mv.get("quantity_delta") or 1))
+        old_pid = str(mv.get("product_id") or "")
+        old_prod_name = "previous item"
+        if old_pid:
+            p_rows = (
+                self.db.table("products")
+                .select("name")
+                .eq("id", old_pid)
+                .eq("business_id", business_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if p_rows:
+                old_prod_name = str(p_rows[0]["name"])
+
+        cust_id: str | None = None
+        credit_amt = 0.0
+        for tok in str(mv.get("notes") or "").split():
+            if tok.startswith("[RETURN_UDHAAR:") and tok.endswith("]"):
+                parts = tok[len("[RETURN_UDHAAR:") : -1].split("|")
+                if len(parts) >= 2:
+                    cust_id = parts[0]
+                    try:
+                        credit_amt = float(parts[1])
+                    except Exception:
+                        pass
+
+        exp_rows = (
+            self.db.table("expenses")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("operation_id", old_operation_id)
+            .eq("status", "active")
+            .execute()
+            .data
+            or []
+        )
+        refund_method = "credit" if cust_id and credit_amt > 0 else (
+            str(exp_rows[0].get("payment_method") or "cash") if exp_rows else "cash"
+        )
+        old_refund = credit_amt + (float(exp_rows[0].get("amount") or 0) if exp_rows else 0.0)
+
+        qty = float(new_quantity) if new_quantity is not None and float(new_quantity) > 0 else old_qty
+        new_refund = round(qty * float(new_unit_price), 2) if new_unit_price > 0 else old_refund
+
+        self.reverse_operation(
+            business_id=business_id,
+            user_id=user_id,
+            operation_id=old_operation_id,
+            reversal_operation_id=str(uuid.uuid4()),
+            transaction_date=transaction_date,
+        )
+        _, resolved_unit, _ = self._load_product_and_stock(
+            business_id=business_id, product_id=new_product_id, fallback_unit=new_unit
+        )
+        ret = self.record_customer_return(
+            business_id=business_id,
+            user_id=user_id,
+            product_id=new_product_id,
+            product_name=new_product_name,
+            quantity=qty,
+            unit=resolved_unit,
+            refund_amount=new_refund,
+            refund_method=refund_method,
+            customer_id=cust_id,
+            transaction_date=transaction_date,
+            operation_id=operation_id,
+        )
+        return {
+            "old_product_name": old_prod_name,
+            "old_quantity": old_qty,
+            "new_product_id": new_product_id,
+            "new_product_name": new_product_name,
+            "quantity": qty,
+            "unit": resolved_unit,
+            "refund_amount": ret["refund_amount"],
+            "refund_method": refund_method,
+            "before_stock": ret["before_stock"],
+            "after_stock": ret["after_stock"],
+            "new_operation_id": operation_id,
+        }
+
+    def swap_last_movement_variant(
+        self,
+        *,
+        business_id: str,
+        user_id: str,
+        old_operation_id: str,
+        movement_type: str,
+        new_product_id: str,
+        new_product_name: str,
+        new_unit: str,
+        new_unit_cost: float,
+        new_quantity: float | None = None,
+        transaction_date: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Atomically swap SKU on last stock receive / damage / expiry movement."""
+        mvs = (
+            self.db.table("inventory_movements")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("operation_id", old_operation_id)
+            .eq("movement_type", movement_type)
+            .execute()
+            .data
+            or []
+        )
+        if not mvs:
+            raise PolicyBlockedError("Previous stock movement not found to swap variant.")
+        mv = mvs[0]
+        old_qty = abs(float(mv.get("quantity_delta") or 1))
+        old_pid = str(mv.get("product_id") or "")
+        old_cost = float(mv.get("unit_cost") or 0)
+        old_prod_name = "previous item"
+        if old_pid:
+            p_rows = (
+                self.db.table("products")
+                .select("name")
+                .eq("id", old_pid)
+                .eq("business_id", business_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if p_rows:
+                old_prod_name = str(p_rows[0]["name"])
+
+        qty = float(new_quantity) if new_quantity is not None and float(new_quantity) > 0 else old_qty
+        _, resolved_unit, new_avail = self._load_product_and_stock(
+            business_id=business_id, product_id=new_product_id, fallback_unit=new_unit
+        )
+        if movement_type in ("damage", "expiry") and new_avail < qty - 1e-6:
+            raise InsufficientStockError(new_avail, new_product_name)
+
+        self.reverse_operation(
+            business_id=business_id,
+            user_id=user_id,
+            operation_id=old_operation_id,
+            reversal_operation_id=str(uuid.uuid4()),
+            transaction_date=transaction_date,
+        )
+        if movement_type == "receive":
+            ucost = float(new_unit_cost) if new_unit_cost > 0 else old_cost
+            rec = self.receive_stock(
+                business_id=business_id,
+                user_id=user_id,
+                product_id=new_product_id,
+                quantity=qty,
+                unit=resolved_unit,
+                unit_cost=ucost,
+                transaction_date=transaction_date,
+                operation_id=operation_id,
+            )
+            return {
+                "old_product_name": old_prod_name,
+                "old_quantity": old_qty,
+                "new_product_id": new_product_id,
+                "new_product_name": new_product_name,
+                "quantity": qty,
+                "unit": resolved_unit,
+                "total_amount": round(qty * ucost, 2),
+                "before_stock": rec["before_qty"],
+                "after_stock": rec["after_qty"],
+                "new_operation_id": operation_id,
+            }
+        rec = self.deduct_damage_or_expiry(
+            business_id=business_id,
+            user_id=user_id,
+            product_id=new_product_id,
+            product_name=new_product_name,
+            quantity=qty,
+            unit=resolved_unit,
+            movement_type=movement_type,
+            transaction_date=transaction_date,
+            operation_id=operation_id,
+        )
+        return {
+            "old_product_name": old_prod_name,
+            "old_quantity": old_qty,
+            "new_product_id": new_product_id,
+            "new_product_name": new_product_name,
+            "quantity": qty,
+            "unit": resolved_unit,
+            "total_amount": 0.0,
+            "before_stock": rec["before_qty"],
+            "after_stock": rec["after_qty"],
+            "new_operation_id": operation_id,
+        }
+

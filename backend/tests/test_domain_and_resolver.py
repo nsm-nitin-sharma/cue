@@ -1250,6 +1250,50 @@ def test_customer_return_variant_swap_and_combined_bill():
     assert ret["after_stock"] == 22.0
     assert store["expenses"][0]["category"] == "Customer Return"
 
+    # 2b. Variant swap on customer_return ("Meggie masala 500 nahi, Meggie masala 250 gram")
+    mag_prods = [
+        {"id": "p500", "business_id": "b1", "name": "Maggie Masala 500 Gram", "base_unit": "piece", "default_selling_price": 80.0},
+        {"id": "p250", "business_id": "b1", "name": "Maggie Masala 250 Gram", "base_unit": "piece", "default_selling_price": 45.0},
+    ]
+    pres_meggie = resolve_product_guarded(
+        "Meggie masala 250 gram",
+        "Meggie masala 500 nahi, Meggie masala 250 gram.",
+        mag_prods,
+        [],
+    )
+    assert pres_meggie.status in {"exact", "verify_alias"} and pres_meggie.product["id"] == "p250"
+
+    store["inventory"].append({"business_id": "b1", "product_id": "p500", "current_quantity": 1.0})
+    store["inventory"].append({"business_id": "b1", "product_id": "p250", "current_quantity": 4.0})
+    tx.record_customer_return(
+        business_id="b1",
+        user_id="u1",
+        product_id="p500",
+        product_name="Maggie Masala 500 Gram",
+        quantity=2,
+        unit="piece",
+        refund_amount=160.0,
+        refund_method="cash",
+        customer_id=None,
+        transaction_date="2026-11-28",
+        operation_id="op-ret-500",
+    )
+    assert next(i for i in store["inventory"] if i["product_id"] == "p500")["current_quantity"] == 3.0
+    sw_ret = tx.swap_last_return_variant(
+        business_id="b1",
+        user_id="u1",
+        old_operation_id="op-ret-500",
+        new_product_id="p250",
+        new_product_name="Maggie Masala 250 Gram",
+        new_unit="piece",
+        new_unit_price=45.0,
+        transaction_date="2026-11-28",
+        operation_id="op-ret-swap",
+    )
+    assert sw_ret["new_product_name"] == "Maggie Masala 250 Gram" and sw_ret["refund_amount"] == 90.0
+    assert next(i for i in store["inventory"] if i["product_id"] == "p500")["current_quantity"] == 1.0
+    assert next(i for i in store["inventory"] if i["product_id"] == "p250")["current_quantity"] == 6.0
+
     # 3. Combined multi-item bill with lump-sum 100 INR (catalog = 2*14 + 45 = 73 or say 2*50 + 45 = 145 -> 100)
     cb = tx.record_combined_bill(
         business_id="b1",

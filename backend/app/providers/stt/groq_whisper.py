@@ -8,18 +8,19 @@ from app.providers.stt.base import STTProvider, STTResult
 _PROMPTS_BY_LANG: dict[str, str] = {
     "en": (
         "Indian retail and kirana store conversation in English only. "
-        "Products: Pepsi, Coca-Cola, Coke, Maggie Masala, Chini, Tata Salt, Fortune Oil, Amul Milk, Nescafe Gold, Surf Excel. "
-        "Terms: pieces, packets, kg, gram, litre, box, cash, online, GPay, Google Pay, PhonePe, Paytm, credit, sold, received, damaged, expired."
+        "Products: Pepsi, Coca-Cola, Coke, Maggie Masala 70g, Maggie Masala 250g, Maggie Masala 500g, Chini, Tata Salt, Fortune Oil, Amul Milk, Nescafe Gold, Surf Excel. "
+        "Terms: pieces, packets, kg, 70 gram, 250 gram, 500 gram, 750ml, litre, box, cash, online, GPay, Google Pay, PhonePe, Paytm, credit, sold, received, damaged, expired, returned."
     ),
     "hi": (
         "भारतीय किराना दुकान की बातचीत शुद्ध हिंदी (देवनागरी) में। "
-        "प्रोडक्ट्स: पेप्सी, कोका-कोला, मैगी मसाला, चीनी, टाटा नमक, अमूल दूध, नेस्कैफे गोल्ड, सर्फ एक्सेल। "
-        "शब्द: पैकेट, पीस, किलो, ग्राम, लीटर, पेटी, कैश, ऑनलाइन, उधार, बिका, आया, खराब, एक्सपायर।"
+        "प्रोडक्ट्स: पेप्सी, कोका-कोला, मैगी मसाला 70 ग्राम, ढाई सौ ग्राम (250g), पांच सौ ग्राम (500g), चीनी, टाटा नमक, अमूल दूध, नेस्कैफे गोल्ड, सर्फ एक्सेल। "
+        "शब्द: दो पैकेट, एक पीस, किलो, सत्तर ग्राम, ढाई सौ ग्राम, पांच सौ ग्राम, लीटर, पेटी, कैश, ऑनलाइन, उधार, बिका, आया, खराब, एक्सपायर, वापस कर गया।"
     ),
     "hinglish": (
         "Romanized Hinglish kirana conversation written strictly in English Latin letters (a-z), NEVER Devanagari script. "
-        "Examples: 'Aaj chini ki kitni sale hui', '2 Maggie Masala 70 gram bik gayi', 'Nitin ko 500 udhaar diya', "
-        "'GPay se ek Coca-Cola li', 'Cash nahi online hua tha', 'Inventory mein kitna stock hai', 'dahi kilo chini aayi'."
+        "Examples: 'Aaj chini ki kitni sale hui', '2 packet Maggie Masala 250 gram bik gayi', 'Customer 2 Maggie Masala 250 gram wapas kar gaya', "
+        "'Maggie Masala 500 nahi 250 gram wali thi', 'dhai sau gram, paanch sau gram, sattar gram, 70g, 250g, 500g', 'Nitin ko 500 udhaar diya', "
+        "'GPay se ek Coca-Cola li', 'Cash nahi online hua tha', 'Inventory mein kitna stock hai', 'aadha kilo chini aayi'."
     ),
 }
 

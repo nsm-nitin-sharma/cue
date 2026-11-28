@@ -1318,8 +1318,11 @@ class VoicePipelineService:
                         raw_op_qty = None
                 new_qty = raw_op_qty if raw_op_qty is not None else extract_post_negation_quantity(raw_transcript)
 
+                swap_supported_kinds = {"record_sale", "customer_return", "inventory_receive", "inventory_damage", "inventory_expiry"}
                 resolved_corr_pid: str | None = None
                 resolved_corr_prod: dict[str, Any] | None = None
+                resolved_corr_status: str = "not_found"
+                resolved_corr_candidates: list[dict[str, Any]] = []
                 variant_cue = bool(
                     re.search(
                         r"\b\d+\s*(?:g|gm|gms|grams?|ml|mls|kg|kilo|ltr|litres?|liters?)\b|wali\s+thi",
@@ -1328,9 +1331,9 @@ class VoicePipelineService:
                     )
                 )
                 swap_query = op.product_query
-                if not swap_query and variant_cue and last_kind == "record_sale":
+                if not swap_query and variant_cue and last_kind in swap_supported_kinds:
                     neg_swap = re.search(
-                        r"(?:nahi|nahin|not|ki\s+jagah|instead\s+of)\s+([a-z0-9\s]+?)(?:\s+wali|\s+thi|\s+tha|$)",
+                        r"(?:nahi|nahin|not|ki\s+jagah|instead\s+of)\s+([a-z0-9\s]+?)(?:\s+wali|\s+thi|\s+tha|[.,]|$)",
                         raw_transcript,
                         re.IGNORECASE,
                     )
@@ -1342,10 +1345,12 @@ class VoicePipelineService:
 
                 if swap_query:
                     pres_corr = resolve_product_guarded(swap_query, raw_transcript, products, aliases)
+                    resolved_corr_status = pres_corr.status
+                    resolved_corr_candidates = pres_corr.candidates
                     if pres_corr.status in {"exact", "verify_alias"} and pres_corr.product:
                         resolved_corr_pid = str(pres_corr.product["id"])
                         resolved_corr_prod = pres_corr.product
-                    elif pres_corr.status == "ambiguous" and pres_corr.candidates and last_kind == "record_sale":
+                    elif pres_corr.status == "ambiguous" and pres_corr.candidates and last_kind in swap_supported_kinds:
                         names = " ya ".join(c["name"] for c in pres_corr.candidates)
                         msg = f"'{swap_query}' mein {len(pres_corr.candidates)} options mile ({names}). Kaunsa variant swap karna hai?"
                         return VoiceTurnResult(
@@ -1365,31 +1370,150 @@ class VoicePipelineService:
                             },
                         )
 
-                # 0. Single-Turn Variant Swap Correction on last sale ("Maggi 70g nahi 250g wali thi")
-                old_sale_op_id = str(context_state.get("last_operation_id") or "")
-                old_sale_pid = str(context_state.get("last_product_id") or "")
+                # 0. Single-Turn Variant Swap Correction across sale, customer_return, receive, damage & expiry
+                old_swap_op_id = str(context_state.get("last_operation_id") or "")
+                old_swap_pid = str(context_state.get("last_product_id") or "")
                 if (
-                    last_kind == "record_sale"
-                    and old_sale_op_id
+                    last_kind in swap_supported_kinds
+                    and old_swap_op_id
                     and resolved_corr_prod is not None
                     and resolved_corr_pid
-                    and resolved_corr_pid != old_sale_pid
-                    and not loss_cue
+                    and resolved_corr_pid != old_swap_pid
                     and not expense_cue
                 ):
                     try:
-                        sw = self.tx.swap_last_sale_variant(
-                            business_id=business_id,
-                            user_id=user_id,
-                            old_operation_id=old_sale_op_id,
-                            new_product_id=resolved_corr_pid,
-                            new_product_name=str(resolved_corr_prod["name"]),
-                            new_unit=str(resolved_corr_prod["base_unit"]),
-                            new_unit_price=float(op.unit_price or resolved_corr_prod.get("default_selling_price") or 0),
-                            new_quantity=float(new_qty) if new_qty is not None else None,
-                            transaction_date=today_str,
-                            operation_id=sub_op_id,
-                        )
+                        if last_kind == "record_sale":
+                            sw = self.tx.swap_last_sale_variant(
+                                business_id=business_id,
+                                user_id=user_id,
+                                old_operation_id=old_swap_op_id,
+                                new_product_id=resolved_corr_pid,
+                                new_product_name=str(resolved_corr_prod["name"]),
+                                new_unit=str(resolved_corr_prod["base_unit"]),
+                                new_unit_price=float(op.unit_price or resolved_corr_prod.get("default_selling_price") or 0),
+                                new_quantity=float(new_qty) if new_qty is not None else None,
+                                transaction_date=today_str,
+                                operation_id=sub_op_id,
+                            )
+                            for pr in products:
+                                if str(pr["id"]) == old_swap_pid:
+                                    pr["current_stock"] = float(pr["current_stock"]) + float(sw["old_quantity"])
+                                elif str(pr["id"]) == resolved_corr_pid and sw.get("after_stock") is not None:
+                                    pr["current_stock"] = float(sw["after_stock"])
+                            context_state["last_product_id"] = resolved_corr_pid
+                            context_state["last_product_name"] = sw["new_product_name"]
+                            context_state["last_sale_id"] = str(sw["sale_id"])
+                            context_state["last_operation_kind"] = "record_sale"
+                            context_state["last_operation_id"] = sub_op_id
+                            replies.append(
+                                f"Variant swap ho gaya: {sw['old_product_name']} → {sw['new_product_name']} ({sw['quantity']:g} {sw['unit']}, ₹{sw['new_total']:,.0f})."
+                            )
+                            receipts.append(
+                                {
+                                    "id": f"slip-{sub_op_id}",
+                                    "operationId": sub_op_id,
+                                    "kind": "correction",
+                                    "title": f"Variant Swapped · {sw['new_product_name']}",
+                                    "subtitle": f"Replaced {sw['old_product_name']} (Old bill voided)",
+                                    "transactionDate": today_str,
+                                    "amountINR": sw["new_total"],
+                                    "lines": [
+                                        {"label": "Old SKU Restored", "value": f"+{sw['old_quantity']:g} {sw['old_product_name']}", "tone": "sage"},
+                                        {"label": "New SKU Billed", "value": f"-{sw['quantity']:g} {sw['new_product_name']} @ ₹{sw['unit_price']:g}", "tone": "ochre"},
+                                        {"label": "New Total", "value": f"₹{sw['new_total']:,.0f}", "tone": "neutral"},
+                                    ],
+                                    "status": "corrected",
+                                    "reversible": True,
+                                }
+                            )
+                        elif last_kind == "customer_return":
+                            sw = self.tx.swap_last_return_variant(
+                                business_id=business_id,
+                                user_id=user_id,
+                                old_operation_id=old_swap_op_id,
+                                new_product_id=resolved_corr_pid,
+                                new_product_name=str(resolved_corr_prod["name"]),
+                                new_unit=str(resolved_corr_prod["base_unit"]),
+                                new_unit_price=float(op.unit_price or resolved_corr_prod.get("default_selling_price") or 0),
+                                new_quantity=float(new_qty) if new_qty is not None else None,
+                                transaction_date=today_str,
+                                operation_id=sub_op_id,
+                            )
+                            for pr in products:
+                                if str(pr["id"]) == old_swap_pid:
+                                    pr["current_stock"] = max(0.0, float(pr["current_stock"]) - float(sw["old_quantity"]))
+                                elif str(pr["id"]) == resolved_corr_pid and sw.get("after_stock") is not None:
+                                    pr["current_stock"] = float(sw["after_stock"])
+                            context_state["last_product_id"] = resolved_corr_pid
+                            context_state["last_product_name"] = sw["new_product_name"]
+                            context_state["last_operation_kind"] = "customer_return"
+                            context_state["last_operation_id"] = sub_op_id
+                            replies.append(
+                                f"Return variant swap ho gaya: {sw['old_product_name']} → {sw['new_product_name']} ({sw['quantity']:g} {sw['unit']}, ₹{sw['refund_amount']:,.0f})."
+                            )
+                            receipts.append(
+                                {
+                                    "id": f"slip-{sub_op_id}",
+                                    "operationId": sub_op_id,
+                                    "kind": "correction",
+                                    "title": f"Return Swapped · {sw['new_product_name']}",
+                                    "subtitle": f"Replaced {sw['old_product_name']} return",
+                                    "transactionDate": today_str,
+                                    "amountINR": sw["refund_amount"],
+                                    "lines": [
+                                        {"label": "Old Return Reversed", "value": f"-{sw['old_quantity']:g} {sw['old_product_name']}", "tone": "ochre"},
+                                        {"label": "New Return Logged", "value": f"+{sw['quantity']:g} {sw['new_product_name']}", "tone": "sage"},
+                                        {"label": "Updated Refund", "value": f"₹{sw['refund_amount']:,.0f}", "tone": "neutral"},
+                                    ],
+                                    "status": "corrected",
+                                    "reversible": True,
+                                }
+                            )
+                        else:
+                            mv_t = (
+                                "receive"
+                                if last_kind == "inventory_receive"
+                                else ("expiry" if last_kind == "inventory_expiry" else "damage")
+                            )
+                            sw = self.tx.swap_last_movement_variant(
+                                business_id=business_id,
+                                user_id=user_id,
+                                old_operation_id=old_swap_op_id,
+                                movement_type=mv_t,
+                                new_product_id=resolved_corr_pid,
+                                new_product_name=str(resolved_corr_prod["name"]),
+                                new_unit=str(resolved_corr_prod["base_unit"]),
+                                new_unit_cost=float(op.cost_price or op.unit_price or resolved_corr_prod.get("default_cost_price") or 0),
+                                new_quantity=float(new_qty) if new_qty is not None else None,
+                                transaction_date=today_str,
+                                operation_id=sub_op_id,
+                            )
+                            context_state["last_product_id"] = resolved_corr_pid
+                            context_state["last_product_name"] = sw["new_product_name"]
+                            context_state["last_operation_kind"] = last_kind
+                            context_state["last_operation_id"] = sub_op_id
+                            if mv_t in ("damage", "expiry"):
+                                context_state["last_damage_operation_id"] = sub_op_id
+                                context_state["last_damage_product_id"] = resolved_corr_pid
+                            replies.append(
+                                f"Variant swap ho gaya: {sw['old_product_name']} → {sw['new_product_name']} ({sw['quantity']:g} {sw['unit']})."
+                            )
+                            receipts.append(
+                                {
+                                    "id": f"slip-{sub_op_id}",
+                                    "operationId": sub_op_id,
+                                    "kind": "correction",
+                                    "title": f"Variant Swapped · {sw['new_product_name']}",
+                                    "subtitle": f"Replaced {sw['old_product_name']} ({mv_t})",
+                                    "transactionDate": today_str,
+                                    "amountINR": sw["total_amount"],
+                                    "lines": [
+                                        {"label": "New Item Stock", "value": f"{sw['before_stock']:g} → {sw['after_stock']:g}", "tone": "sage"},
+                                    ],
+                                    "status": "corrected",
+                                    "reversible": True,
+                                }
+                            )
                     except (InsufficientStockError, PolicyBlockedError) as exc:
                         return VoiceTurnResult(
                             operation_id=operation_id,
@@ -1398,38 +1522,21 @@ class VoicePipelineService:
                             reply=exc.message,
                             language=language,  # type: ignore[arg-type]
                         )
-                    for pr in products:
-                        if str(pr["id"]) == old_sale_pid:
-                            pr["current_stock"] = float(pr["current_stock"]) + float(sw["old_quantity"])
-                        elif str(pr["id"]) == resolved_corr_pid and sw.get("after_stock") is not None:
-                            pr["current_stock"] = float(sw["after_stock"])
-                    context_state["last_product_id"] = resolved_corr_pid
-                    context_state["last_product_name"] = sw["new_product_name"]
-                    context_state["last_sale_id"] = str(sw["sale_id"])
-                    context_state["last_operation_kind"] = "record_sale"
-                    context_state["last_operation_id"] = sub_op_id
-                    replies.append(
-                        f"Variant swap ho gaya: {sw['old_product_name']} → {sw['new_product_name']} ({sw['quantity']:g} {sw['unit']}, ₹{sw['new_total']:,.0f})."
-                    )
-                    receipts.append(
-                        {
-                            "id": f"slip-{sub_op_id}",
-                            "operationId": sub_op_id,
-                            "kind": "correction",
-                            "title": f"Variant Swapped · {sw['new_product_name']}",
-                            "subtitle": f"Replaced {sw['old_product_name']} (Old bill voided)",
-                            "transactionDate": today_str,
-                            "amountINR": sw["new_total"],
-                            "lines": [
-                                {"label": "Old SKU Restored", "value": f"+{sw['old_quantity']:g} {sw['old_product_name']}", "tone": "sage"},
-                                {"label": "New SKU Billed", "value": f"-{sw['quantity']:g} {sw['new_product_name']} @ ₹{sw['unit_price']:g}", "tone": "ochre"},
-                                {"label": "New Total", "value": f"₹{sw['new_total']:,.0f}", "tone": "neutral"},
-                            ],
-                            "status": "corrected",
-                            "reversible": True,
-                        }
-                    )
                     continue
+
+                if variant_cue and swap_query and resolved_corr_status == "not_found":
+                    hint = (
+                        f"Available variants: {', '.join(c['name'] for c in resolved_corr_candidates)}."
+                        if resolved_corr_candidates
+                        else "Kripya catalog mein maujood sahi variant naam bolein."
+                    )
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"'{swap_query}' inventory mein nahi mila. {hint}",
+                        language=language,  # type: ignore[arg-type]
+                    )
 
                 # 1. Damage / Expiry Correction
                 if not expense_cue and not sale_cue and (
