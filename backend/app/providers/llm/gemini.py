@@ -40,6 +40,7 @@ SECURITY & PRECISION RULES:
 6. CORRECTION VS NEW OPERATION (CRITICAL — DO NOT DUPLICATE OR CROSS-CONTAMINATE):
    - If the user is correcting ANY detail of an immediately previous transaction in `active_context` (`last_operation_kind`, `last_sale_id`, `last_expense_id`, `last_damage_operation_id`, `last_product_name`) — e.g.:
      * Sale / payment corrections: "20 pepsi nahi 10 hi biki", "Actually 7 the", "Cash nahi online", "Online nahi cash tha", "Last transaction cash se nahi online hua tha", "galti se cash bol diya"
+     * Sale QTY + SPLIT payment corrections: "Sorry, usne 3 kg li thi, isme se 2 kg chini ke rupaye de diye aur 1 kg udhaar" -> `intent: "correct_last_operation"`, `quantity: 3`, `payment_status: "partial"`, `notes: "paid_qty:2"`, `paid_amount: <2 kg price if known or null>`, `uses_prior_context: true`.
      * Sale BILL TOTAL / RUPEE corrections: "700 nahi 100", "700 rupee nahi 100 rupee", "700 quantity nahi, 100 rupaye" -> `intent: "correct_last_operation"`, `total_amount: 100`, `quantity: null`, `payment_method: null` (DO NOT put `payment_method: "cash"` or `quantity: 100` when user is changing the rupee price!).
      * Variant swap corrections: "Maggi 70g nahi 250g wali thi", "Coke 750ml nahi 2 litre thi" -> `intent: "correct_last_operation"`, `product_query` set to the NEW variant ("Maggi 250g"), `uses_prior_context: true`, `quantity` left `null` unless qty changed!
      * Expense corrections: "1000 nahi 500 tha", "bijli bill cash nahi online diya"

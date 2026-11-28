@@ -1053,6 +1053,13 @@ def _make_rich_db(store):
             return _Tbl(self.st, name)
 
         def rpc(self, fn_name, params):
+            class _RpcExec:
+                def __init__(self, d):
+                    self._d = d
+
+                def execute(self):
+                    return _Resp(self._d)
+
             if fn_name == "rpc_record_sale":
                 pid = params["p_product_id"]
                 qty = float(params["p_quantity"])
@@ -1099,14 +1106,40 @@ def _make_rich_db(store):
                         "operation_id": params["p_operation_id"],
                     }
                 )
-                class _RpcExec:
-                    def __init__(self, d):
-                        self._d = d
-
-                    def execute(self):
-                        return _Resp(self._d)
-
                 return _RpcExec({"sale_id": sale_id, "before_qty": before, "after_qty": before - qty})
+            if fn_name == "rpc_correct_sale_quantity":
+                sid = params["p_sale_id"]
+                nq = float(params["p_new_quantity"])
+                sale = next(s for s in self.st["sales"] if s["id"] == sid)
+                si = next(x for x in self.st["sale_items"] if x["sale_id"] == sid)
+                inv = next(i for i in self.st["inventory"] if i["product_id"] == si["product_id"])
+                oq = float(si["quantity"])
+                up = float(si["unit_price"])
+                delta = oq - nq
+                inv["current_quantity"] = float(inv["current_quantity"]) + delta
+                si["quantity"] = nq
+                ntot = round(nq * up, 2)
+                si["line_total"] = ntot
+                old_credit = max(0.0, float(sale["total_amount"]) - float(sale["paid_amount"]))
+                sale["total_amount"] = ntot
+                if sale["payment_status"] == "paid":
+                    sale["paid_amount"] = ntot
+                else:
+                    sale["paid_amount"] = min(float(sale["paid_amount"]), ntot)
+                new_credit = max(0.0, ntot - float(sale["paid_amount"]))
+                if sale.get("customer_id"):
+                    cust = next(c for c in self.st["customers"] if c["id"] == sale["customer_id"])
+                    cust["outstanding_balance"] = max(0.0, float(cust["outstanding_balance"]) + (new_credit - old_credit))
+                return _RpcExec(
+                    {
+                        "sale_id": sid,
+                        "old_quantity": oq,
+                        "new_quantity": nq,
+                        "old_total": oq * up,
+                        "new_total": ntot,
+                        "stock_delta": delta,
+                    }
+                )
             raise NotImplementedError(fn_name)
 
     return _DB(store)
@@ -1514,3 +1547,46 @@ def test_supplier_credit_split_sale_and_voice_rename():
     )
     assert sup_all["settled_count"] == 1 and sup_all["total_paid"] == 3000.0
     assert sup["outstanding_balance"] == 0.0
+
+    # 10. Correcting qty (2 kg -> 3 kg) AND split payment (2 kg paid=110, 1 kg udhaar=55) updates Khata & stock accurately
+    chini_store = {
+        "products": [{"id": "pch", "business_id": "b1", "name": "Chini", "base_unit": "kg", "default_selling_price": 55.0}],
+        "customers": [{"id": "cn", "business_id": "b1", "is_active": True, "name": "Nitin", "area_note": "", "outstanding_balance": 0.0}],
+        "inventory": [{"business_id": "b1", "product_id": "pch", "current_quantity": 15.0}],
+        "sales": [],
+        "sale_items": [],
+        "inventory_movements": [],
+    }
+    ch_tx = TransactionEngine(_make_rich_db(chini_store))
+    # Simulate RPC recording initial 2 kg @ 55 (55 cash paid + 55 udhaar)
+    init_sale = ch_tx.record_sale(
+        business_id="b1",
+        user_id="u1",
+        product_id="pch",
+        product_name="Chini",
+        quantity=2,
+        unit="kg",
+        unit_price=55.0,
+        payment_status="partial",
+        paid_amount=55.0,
+        customer_id="cn",
+        transaction_date="2026-11-28",
+        operation_id="op-ch-1",
+    )
+    chini_store["customers"][0]["outstanding_balance"] = 55.0
+    assert chini_store["inventory"][0]["current_quantity"] == 13.0
+    # Now correct to 3 kg with 2 kg (110) paid & 1 kg (55) udhaar
+    corr_split = ch_tx.correct_sale_quantity(
+        business_id="b1",
+        user_id="u1",
+        sale_id=init_sale["sale_id"],
+        new_quantity=3.0,
+        operation_id="op-ch-2",
+        transaction_date="2026-11-28",
+        new_paid_amount=110.0,
+        new_payment_status="partial",
+    )
+    assert corr_split["new_total"] == 165.0
+    assert corr_split["paid_amount"] == 110.0 and corr_split["credit_amount"] == 55.0
+    assert chini_store["inventory"][0]["current_quantity"] == 12.0
+    assert chini_store["customers"][0]["outstanding_balance"] == 55.0

@@ -818,6 +818,8 @@ class TransactionEngine:
         new_quantity: float,
         operation_id: str,
         transaction_date: str,
+        new_paid_amount: float | None = None,
+        new_payment_status: str | None = None,
     ) -> dict[str, Any]:
         res = self.db.rpc(
             "rpc_correct_sale_quantity",
@@ -830,13 +832,68 @@ class TransactionEngine:
                 "p_transaction_date": transaction_date,
             },
         ).execute()
+        data = dict(res.data or {})
         # rpc_correct_sale_quantity updates the sole sale row in-place without inserting a child row;
         # keep status="active" (for new_quantity > 0) so Today/Sales Ledger/QueryEngine include the corrected revenue.
         if new_quantity > 0:
-            self.db.table("sales").update({"status": "active"}).eq("id", sale_id).eq(
-                "business_id", business_id
-            ).execute()
-        return res.data
+            if new_paid_amount is not None or new_payment_status is not None:
+                sale_rows = (
+                    self.db.table("sales")
+                    .select("*")
+                    .eq("id", sale_id)
+                    .eq("business_id", business_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+            else:
+                sale_rows = []
+            if sale_rows and (new_paid_amount is not None or new_payment_status is not None):
+                cur_s = sale_rows[0]
+                cur_total = float(data.get("new_total") if data.get("new_total") is not None else cur_s.get("total_amount") or 0)
+                cur_paid = float(cur_s.get("paid_amount") or 0)
+                cur_status = str(cur_s.get("payment_status") or "paid")
+                final_paid = (
+                    max(0.0, min(cur_total, round(float(new_paid_amount), 2)))
+                    if new_paid_amount is not None
+                    else (cur_total if new_payment_status == "paid" else (0.0 if new_payment_status == "credit" else cur_paid))
+                )
+                final_status = (
+                    "paid"
+                    if final_paid >= cur_total - 0.009
+                    else ("credit" if final_paid <= 0.009 else "partial")
+                )
+                cur_unpaid = max(0.0, round(cur_total - cur_paid, 2))
+                new_unpaid = max(0.0, round(cur_total - final_paid, 2))
+                bal_delta = round(new_unpaid - cur_unpaid, 2)
+                if cur_s.get("customer_id") and abs(bal_delta) > 0.009:
+                    c_rows = (
+                        self.db.table("customers")
+                        .select("outstanding_balance")
+                        .eq("id", cur_s["customer_id"])
+                        .eq("business_id", business_id)
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if c_rows:
+                        updated_bal = max(0.0, round(float(c_rows[0]["outstanding_balance"] or 0) + bal_delta, 2))
+                        self.db.table("customers").update(
+                            {"outstanding_balance": updated_bal, "updated_at": "now()"}
+                        ).eq("id", cur_s["customer_id"]).eq("business_id", business_id).execute()
+                self.db.table("sales").update(
+                    {"status": "active", "paid_amount": final_paid, "payment_status": final_status}
+                ).eq("id", sale_id).eq("business_id", business_id).execute()
+                data["paid_amount"] = final_paid
+                data["credit_amount"] = new_unpaid
+                data["payment_status"] = final_status
+            else:
+                self.db.table("sales").update({"status": "active"}).eq("id", sale_id).eq(
+                    "business_id", business_id
+                ).execute()
+        return data
 
     def correct_sale_payment(
         self,

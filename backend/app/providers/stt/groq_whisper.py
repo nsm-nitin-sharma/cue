@@ -21,7 +21,7 @@ _PROMPTS_BY_LANG: dict[str, str] = {
         "Examples: 'Aaj chini ki kitni sale hui', '2 packet Maggie Masala 250 gram bik gayi', 'Customer 2 Maggie Masala 250 gram wapas kar gaya', "
         "'Maggie Masala 500 nahi 250 gram wali thi', '700 rupee nahi 100 rupee', 'dhai sau gram, paanch sau gram, sattar gram, 70g, 250g, 500g', "
         "'Supplier Sharma ji se 10000 ka maal udhaar aaya', 'Supplier Rahul aur Supplier Gita ko paanch paanch hazaar (5000-5000) ka udhaar diya', "
-        "'Nitin ko 2 kg chini bechi, 1 kg ke rupaye diye aur 1 kg udhaar', 'GPay se ek Coca-Cola li', 'Cash nahi online hua tha'."
+        "'Nitin ko 2 kg chini bechi, 1 kg ke rupaye diye aur 1 kg udhaar', 'Sorry usne 3 kg chini li thi, 2 kg ke rupaye de diye aur 1 kg udhaar', 'GPay se ek Coca-Cola li', 'Cash nahi online hua tha'."
     ),
 }
 

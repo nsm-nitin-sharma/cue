@@ -2196,8 +2196,19 @@ class VoicePipelineService:
                     )
                     continue
 
-                # 3b. Sale total rupee / bill amount correction (e.g., "700 na hii 100", "700 rupee nahi, 100 rupee")
+                # 3b. Sale total rupee / bill amount correction (ONLY when not changing qty or cash+udhaar split)
                 tlow = raw_transcript.lower()
+                is_split_corr_cue = bool(
+                    op.payment_status == "partial"
+                    or (
+                        re.search(r"\b(udhaar|credit)\b", tlow)
+                        and re.search(r"\b(cash|online|upi|bank|rupay|rupaye|rupaiye|rupee|rupi|paise|dee?\s*diyae?|diye|diya|paid|aadha|half)\b", tlow)
+                    )
+                )
+                has_qty_corr_cue = bool(
+                    op.quantity is not None
+                    or re.search(r"\b\d+(?:\.\d+)?\s*(?:kg|kilo|geni|gram|g|packet|packets|piece|pieces|litre|ltr|box)\b", tlow)
+                )
                 rupee_cue = bool(
                     re.search(
                         r"\b(rupees?|rupaye|rupaiye|rupai|rupi|rs|inr|bill|total|amount|rate|price|quantity\s+nahi|qty\s+nahi)\b",
@@ -2218,6 +2229,8 @@ class VoicePipelineService:
                     sale_id
                     and not loss_cue
                     and not expense_cue
+                    and not is_split_corr_cue
+                    and not has_qty_corr_cue
                     and (last_kind == "record_sale" or sale_cue or last_kind is None)
                     and (rupee_cue or matches_prev_total or explicit_amt_target is not None)
                 )
@@ -2266,9 +2279,9 @@ class VoicePipelineService:
                     )
                     continue
 
-                # 4. Sale payment method/status correction (require spoken payment/udhaar cue so amount/qty edits are never hijacked)
+                # 4. Sale payment method/status correction (require spoken payment/udhaar cue and NOT qty/split edits)
                 has_spoken_pm_cue = bool(re.search(r"\b(online|upi|ubi|gpay|phonepe|paytm|cash|bank|udhaar|credit)\b", tlow))
-                if sale_id and not loss_cue and not expense_cue and (
+                if sale_id and not loss_cue and not expense_cue and not is_split_corr_cue and new_qty is None and (
                     last_kind == "record_sale" or sale_cue or last_kind is None
                 ) and (
                     has_spoken_pm_cue
@@ -2276,7 +2289,7 @@ class VoicePipelineService:
                 ) and (
                     op.payment_method is not None
                     or op.payment_status is not None
-                    or (op.quantity is None and has_spoken_pm_cue)
+                    or has_spoken_pm_cue
                 ):
                     target_pm = op.payment_method
                     target_ps = op.payment_status
@@ -2330,25 +2343,64 @@ class VoicePipelineService:
                     )
                     continue
 
-                # 5. Sale quantity correction
-                if sale_id and new_qty is not None and not loss_cue and not expense_cue and (
+                # 5. Sale quantity & optional split-payment correction
+                effective_corr_qty = new_qty
+                if effective_corr_qty is None and is_split_corr_cue and context_state.get("last_sale_qty"):
+                    effective_corr_qty = float(context_state["last_sale_qty"])
+                if sale_id and effective_corr_qty is not None and not loss_cue and not expense_cue and (
                     last_kind == "record_sale" or sale_cue or last_kind is None
                 ):
+                    corr_target_paid: float | None = None
+                    corr_target_status: str | None = None
+                    if is_split_corr_cue:
+                        corr_target_status = "partial"
+                        if op.paid_amount is not None and float(op.paid_amount) > 0:
+                            corr_target_paid = float(op.paid_amount)
+                        else:
+                            paid_qty_c: float | None = None
+                            if op.notes and "paid_qty:" in str(op.notes):
+                                mq = re.search(r"paid_qty:(\d+(?:\.\d+)?)", str(op.notes))
+                                if mq:
+                                    paid_qty_c = float(mq.group(1))
+                            if paid_qty_c is None:
+                                m_fc = re.search(
+                                    r"(?:isme\s+se|usne|aur|,)?\s*(\d+(?:\.\d+)?|\bek\b|\bdo\b|\bteen\b|\baadha\b|\bhalf\b)\s*(?:kg|kilo|geni|gram|g|packet|packets|piece|pieces|litre|ltr|box)?\s*(?:chini|sugar)?\s*(?:ke|ki)?\s*(?:rupay|rupaye|rupaiye|rupee|rupi|paise|cash|online|upi|rs)?\s*(?:dee?\s*diyae?|de\s+diye|diye|diya|doei|paid)",
+                                    raw_transcript,
+                                    re.IGNORECASE,
+                                )
+                                if m_fc:
+                                    paid_qty_c = parse_indian_number(m_fc.group(1))
+                            unit_p_est = (
+                                float(op.unit_price)
+                                if op.unit_price
+                                else (
+                                    round(float(context_state["last_sale_total"]) / float(context_state["last_sale_qty"]), 2)
+                                    if float(context_state.get("last_sale_qty") or 0) > 0 and float(context_state.get("last_sale_total") or 0) > 0
+                                    else 0.0
+                                )
+                            )
+                            if paid_qty_c is not None and 0 < paid_qty_c <= float(effective_corr_qty) and unit_p_est > 0:
+                                corr_target_paid = round(paid_qty_c * unit_p_est, 2)
+                            elif paid_qty_c is not None and 0 < paid_qty_c < float(effective_corr_qty) and op.total_amount:
+                                corr_target_paid = round((paid_qty_c / float(effective_corr_qty)) * float(op.total_amount), 2)
+
                     try:
                         corr = self.tx.correct_sale_quantity(
                             business_id=business_id,
                             user_id=user_id,
                             sale_id=sale_id,
-                            new_quantity=float(new_qty),
+                            new_quantity=float(effective_corr_qty),
                             operation_id=sub_op_id,
                             transaction_date=today_str,
+                            new_paid_amount=corr_target_paid,
+                            new_payment_status=corr_target_status,
                         )
                     except RuntimeError as exc:
                         err_s = str(exc)
                         if "INSUFFICIENT_STOCK:" in err_s:
                             avail = err_s.split("INSUFFICIENT_STOCK:", 1)[1].split('"', 1)[0].strip()
                             msg = (
-                                f"Stock sirf {avail} bacha hai, isliye quantity {float(new_qty):g} update nahi ho sakti. "
+                                f"Stock sirf {avail} bacha hai, isliye quantity {float(effective_corr_qty):g} update nahi ho sakti. "
                                 "Agar galat variant record hua ho toh receipt par 'Reverse' dabayein aur sahi product bolein."
                             )
                         else:
@@ -2362,9 +2414,22 @@ class VoicePipelineService:
                         )
                     context_state["last_operation_kind"] = "record_sale"
                     context_state["last_operation_id"] = sub_op_id
-                    replies.append(
-                        f"Sale correct ho gayi: {corr['old_quantity']:g} se {corr['new_quantity']:g} (₹{corr['new_total']:,.0f}). Audit trail updated."
+                    context_state["last_sale_total"] = float(corr.get("new_total") or 0)
+                    context_state["last_sale_qty"] = float(corr.get("new_quantity") or effective_corr_qty)
+                    split_note = (
+                        f" · Paid ₹{corr['paid_amount']:,.0f}, Udhaar ₹{corr['credit_amount']:,.0f}"
+                        if corr.get("payment_status") == "partial" and corr.get("paid_amount") is not None
+                        else ""
                     )
+                    replies.append(
+                        f"Sale correct ho gayi: {corr['old_quantity']:g} se {corr['new_quantity']:g} (₹{corr['new_total']:,.0f}{split_note}). Audit trail updated."
+                    )
+                    corr_lines = [
+                        {"label": "Quantity", "value": f"{corr['old_quantity']:g} → {corr['new_quantity']:g}", "tone": "ochre"},
+                        {"label": "Stock Adjusted", "value": f"{corr['stock_delta']:+g}", "tone": "sage"},
+                    ]
+                    if corr.get("payment_status") == "partial" and corr.get("paid_amount") is not None:
+                        corr_lines.append({"label": "Paid / Udhaar", "value": f"₹{corr['paid_amount']:,.0f} / ₹{corr['credit_amount']:,.0f}", "tone": "ochre"})
                     receipts.append(
                         {
                             "id": f"slip-{sub_op_id}",
@@ -2374,10 +2439,7 @@ class VoicePipelineService:
                             "subtitle": "Compensating stock reversal logged",
                             "transactionDate": today_str,
                             "amountINR": corr["new_total"],
-                            "lines": [
-                                {"label": "Quantity", "value": f"{corr['old_quantity']:g} → {corr['new_quantity']:g}", "tone": "ochre"},
-                                {"label": "Stock Adjusted", "value": f"{corr['stock_delta']:+g}", "tone": "sage"},
-                            ],
+                            "lines": corr_lines,
                             "status": "corrected",
                         }
                     )
