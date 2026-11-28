@@ -312,6 +312,37 @@ def add_manual_payment(
     )
 
 
+@router.post("/suppliers/payments")
+def add_manual_supplier_payment(
+    req: ManualCustomerPaymentRequest,
+    user: dict = Depends(get_current_user),
+    business_id: str = Depends(get_active_business_id),
+) -> dict:
+    db = get_admin_supabase()
+    sup_rows = (
+        db.table("customers")
+        .select("name")
+        .eq("id", req.customer_id)
+        .eq("business_id", business_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    sup_name = str(sup_rows[0]["name"]) if sup_rows else "Supplier"
+    tx = TransactionEngine(db)
+    return tx.record_supplier_payment(
+        business_id=business_id,
+        user_id=user["user_id"],
+        supplier_id=req.customer_id,
+        supplier_name=sup_name,
+        amount=req.amount,
+        payment_method=req.payment_method,
+        transaction_date=get_business_today().isoformat(),
+        operation_id=str(uuid.uuid4()),
+    )
+
+
 @router.post("/inventory/products/{product_id}/archive")
 def archive_inventory_product(
     product_id: str,

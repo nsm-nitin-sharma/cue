@@ -941,3 +941,386 @@ def test_reverse_operation_updates_inventory_for_direct_and_corrected_sales():
         transaction_date="2026-11-28",
     )
     assert store["inventory"][0]["current_quantity"] == 20.0
+
+
+def _make_rich_db(store):
+    class _Resp:
+        def __init__(self, data):
+            self.data = data
+
+    class _Tbl:
+        def __init__(self, st, name):
+            self.st = st
+            self.name = name
+            self._act = "select"
+            self._payload = None
+            self._filters = []
+
+        def select(self, *_a, **_k):
+            self._act = "select"
+            return self
+
+        def update(self, payload):
+            self._act = "update"
+            self._payload = payload
+            return self
+
+        def insert(self, payload):
+            self._act = "insert"
+            self._payload = payload
+            return self
+
+        def eq(self, k, v):
+            self._filters.append(("eq", k, v))
+            return self
+
+        def neq(self, k, v):
+            self._filters.append(("neq", k, v))
+            return self
+
+        def in_(self, k, vals):
+            self._filters.append(("in", k, set(vals)))
+            return self
+
+        def gte(self, k, v):
+            self._filters.append(("gte", k, v))
+            return self
+
+        def lte(self, k, v):
+            self._filters.append(("lte", k, v))
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            rows = self.st.setdefault(self.name, [])
+            if self._act == "insert":
+                row = {"id": f"{self.name}-{len(rows) + 1}", "created_at": "2026-11-28T10:00:00", **self._payload}
+                rows.append(row)
+                return _Resp([row])
+            matched = []
+            for r in rows:
+                ok = True
+                for kind, k, v in self._filters:
+                    if kind == "eq" and r.get(k) != v:
+                        ok = False
+                    elif kind == "neq" and r.get(k) == v:
+                        ok = False
+                    elif kind == "in" and r.get(k) not in v:
+                        ok = False
+                    elif kind == "gte" and str(r.get(k) or "") < str(v):
+                        ok = False
+                    elif kind == "lte" and str(r.get(k) or "") > str(v):
+                        ok = False
+                if ok:
+                    matched.append(r)
+            if self._act == "update":
+                for r in matched:
+                    r.update(self._payload)
+            return _Resp(matched)
+
+    class _DB:
+        def __init__(self, st):
+            self.st = st
+
+        def table(self, name):
+            return _Tbl(self.st, name)
+
+        def rpc(self, fn_name, params):
+            if fn_name == "rpc_record_sale":
+                pid = params["p_product_id"]
+                qty = float(params["p_quantity"])
+                inv = next(i for i in self.st["inventory"] if i["product_id"] == pid)
+                before = float(inv["current_quantity"])
+                inv["current_quantity"] = before - qty
+                sale_id = f"sales-{len(self.st['sales']) + 1}"
+                tot = round(qty * float(params["p_unit_price"]), 2)
+                self.st["sales"].append(
+                    {
+                        "id": sale_id,
+                        "business_id": params["p_business_id"],
+                        "customer_id": params["p_customer_id"],
+                        "total_amount": tot,
+                        "paid_amount": float(params["p_paid_amount"]),
+                        "payment_status": params["p_payment_status"],
+                        "transaction_date": params["p_transaction_date"],
+                        "status": "active",
+                        "operation_id": params["p_operation_id"],
+                        "notes": params["p_notes"],
+                    }
+                )
+                self.st["sale_items"].append(
+                    {
+                        "id": f"si-{len(self.st['sale_items']) + 1}",
+                        "business_id": params["p_business_id"],
+                        "sale_id": sale_id,
+                        "product_id": pid,
+                        "quantity": qty,
+                        "unit": params["p_unit"],
+                        "unit_price": float(params["p_unit_price"]),
+                        "line_total": tot,
+                    }
+                )
+                self.st["inventory_movements"].append(
+                    {
+                        "id": f"mv-{len(self.st['inventory_movements']) + 1}",
+                        "business_id": params["p_business_id"],
+                        "product_id": pid,
+                        "movement_type": "sale",
+                        "quantity_delta": -qty,
+                        "unit": params["p_unit"],
+                        "reference_id": sale_id,
+                        "operation_id": params["p_operation_id"],
+                    }
+                )
+                class _RpcExec:
+                    def __init__(self, d):
+                        self._d = d
+
+                    def execute(self):
+                        return _Resp(self._d)
+
+                return _RpcExec({"sale_id": sale_id, "before_qty": before, "after_qty": before - qty})
+            raise NotImplementedError(fn_name)
+
+    return _DB(store)
+
+
+def test_multiday_queries_and_supplier_separation():
+    from app.core.time_utils import resolve_date_range
+
+    start_w, end_w, lbl_w = resolve_date_range(date_range="this_week", timezone_name="Asia/Kolkata")
+    assert start_w <= end_w and lbl_w == "Is hafte"
+
+    store = {
+        "products": [{"id": "p-mag", "name": "Maggi Masala 70g", "base_unit": "packet"}],
+        "sales": [
+            {"id": "s1", "business_id": "b1", "status": "active", "transaction_date": start_w.isoformat(), "total_amount": 140.0, "paid_amount": 140.0},
+            {"id": "s2", "business_id": "b1", "status": "active", "transaction_date": end_w.isoformat(), "total_amount": 60.0, "paid_amount": 0.0},
+        ],
+        "sale_items": [
+            {"id": "si1", "business_id": "b1", "sale_id": "s1", "product_id": "p-mag", "quantity": 10.0, "line_total": 140.0},
+        ],
+        "expenses": [
+            {"id": "e1", "business_id": "b1", "status": "active", "transaction_date": start_w.isoformat(), "amount": 250.0, "category": "Supplies"},
+        ],
+        "customers": [
+            {"id": "c1", "business_id": "b1", "is_active": True, "name": "Rahul", "area_note": "", "outstanding_balance": 300.0},
+            {"id": "sup1", "business_id": "b1", "is_active": True, "name": "Sharma ji", "area_note": "[SUPPLIER]", "outstanding_balance": 5000.0},
+        ],
+    }
+    qe = QueryEngine(_make_rich_db(store))
+
+    sales_w = qe.answer_query(
+        business_id="b1",
+        topic="sales_summary",
+        product_query=None,
+        customer_query=None,
+        products=store["products"],
+        aliases=[],
+        date_range="this_week",
+    )
+    assert sales_w["amount_inr"] == 200.0
+    assert "Is hafte" in sales_w["reply"]
+
+    exp_w = qe.answer_query(
+        business_id="b1",
+        topic="expenses_summary",
+        product_query=None,
+        customer_query=None,
+        products=store["products"],
+        aliases=[],
+        date_range="this_week",
+    )
+    assert exp_w["amount_inr"] == 250.0
+
+    # Customer receivables exclude [SUPPLIER] rows; supplier_balance queries ONLY suppliers
+    pend = qe.answer_query(
+        business_id="b1",
+        topic="pending_payments",
+        product_query=None,
+        customer_query=None,
+        products=store["products"],
+        aliases=[],
+    )
+    assert pend["amount_inr"] == 300.0
+    sup_q = qe.answer_query(
+        business_id="b1",
+        topic="supplier_balance",
+        product_query=None,
+        customer_query=None,
+        products=store["products"],
+        aliases=[],
+    )
+    assert sup_q["amount_inr"] == 5000.0 and "Sharma ji" in sup_q["reply"]
+
+
+def test_customer_return_variant_swap_and_combined_bill():
+    from app.services.transaction_engine import TransactionEngine
+
+    store = {
+        "products": [
+            {"id": "p70", "business_id": "b1", "name": "Maggi Masala 70g", "base_unit": "packet", "default_selling_price": 14.0},
+            {"id": "p250", "business_id": "b1", "name": "Maggi Masala 250g", "base_unit": "packet", "default_selling_price": 50.0},
+            {"id": "pcoke", "business_id": "b1", "name": "Coke 750ml", "base_unit": "piece", "default_selling_price": 45.0},
+        ],
+        "product_aliases": [],
+        "inventory": [
+            {"business_id": "b1", "product_id": "p70", "current_quantity": 20.0},
+            {"business_id": "b1", "product_id": "p250", "current_quantity": 10.0},
+            {"business_id": "b1", "product_id": "pcoke", "current_quantity": 12.0},
+        ],
+        "customers": [
+            {"id": "c-ramesh", "business_id": "b1", "is_active": True, "name": "Ramesh", "area_note": "", "outstanding_balance": 0.0},
+        ],
+        "sales": [],
+        "sale_items": [],
+        "inventory_movements": [],
+        "expenses": [],
+        "customer_payments": [],
+        "voice_transactions": [],
+        "conversation_messages": [],
+    }
+    tx = TransactionEngine(_make_rich_db(store))
+
+    # 1. Record sale on 70g -> Variant swap to 250g in one turn
+    tx.record_sale(
+        business_id="b1",
+        user_id="u1",
+        product_id="p70",
+        product_name="Maggi Masala 70g",
+        quantity=2,
+        unit="packet",
+        unit_price=14.0,
+        payment_status="paid",
+        paid_amount=28.0,
+        customer_id=None,
+        transaction_date="2026-11-28",
+        operation_id="op-sale-1",
+    )
+    assert store["inventory"][0]["current_quantity"] == 18.0
+    sw = tx.swap_last_sale_variant(
+        business_id="b1",
+        user_id="u1",
+        old_operation_id="op-sale-1",
+        new_product_id="p250",
+        new_product_name="Maggi Masala 250g",
+        new_unit="packet",
+        new_unit_price=50.0,
+        transaction_date="2026-11-28",
+        operation_id="op-swap-1",
+    )
+    assert sw["new_total"] == 100.0
+    assert store["inventory"][0]["current_quantity"] == 20.0  # 70g restored
+    assert store["inventory"][1]["current_quantity"] == 8.0   # 250g deducted
+
+    # 2. Customer return (wapsi): 2 Maggi 70g returned for 28 INR cash refund -> stock 20 -> 22, expense recorded & reversible
+    ret = tx.record_customer_return(
+        business_id="b1",
+        user_id="u1",
+        product_id="p70",
+        product_name="Maggi Masala 70g",
+        quantity=2,
+        unit="packet",
+        refund_amount=28.0,
+        refund_method="cash",
+        customer_id=None,
+        transaction_date="2026-11-28",
+        operation_id="op-ret-1",
+    )
+    assert ret["after_stock"] == 22.0
+    assert store["expenses"][0]["category"] == "Customer Return"
+
+    # 3. Combined multi-item bill with lump-sum 100 INR (catalog = 2*14 + 45 = 73 or say 2*50 + 45 = 145 -> 100)
+    cb = tx.record_combined_bill(
+        business_id="b1",
+        user_id="u1",
+        items=[
+            {"product_id": "p250", "product_name": "Maggi Masala 250g", "quantity": 2, "unit": "packet", "unit_price": 50.0},
+            {"product_id": "pcoke", "product_name": "Coke 750ml", "quantity": 1, "unit": "piece", "unit_price": 45.0},
+        ],
+        customer_id="c-ramesh",
+        bill_total_amount=100.0,
+        paid_amount=None,
+        payment_status="paid",
+        payment_method="cash",
+        transaction_date="2026-11-28",
+        operation_id="op-cb-1",
+    )
+    assert cb["total_amount"] == 100.0 and cb["discount_amount"] == 45.0
+    assert len(cb["items"]) == 2
+    assert store["inventory"][1]["current_quantity"] == 6.0
+    assert store["inventory"][2]["current_quantity"] == 11.0
+
+
+def test_supplier_credit_split_sale_and_voice_rename():
+    from app.services.transaction_engine import TransactionEngine
+
+    store = {
+        "products": [{"id": "p1", "business_id": "b1", "name": "Coca-Cola", "normalized_name": "coca-cola"}],
+        "product_aliases": [],
+        "customers": [
+            {"id": "c-nitin", "business_id": "b1", "is_active": True, "name": "Nitin", "phone": "", "area_note": "", "outstanding_balance": 0.0},
+        ],
+        "sales": [],
+        "expenses": [],
+        "voice_transactions": [],
+        "conversation_messages": [],
+        "inventory_movements": [],
+        "customer_payments": [],
+    }
+    tx = TransactionEngine(_make_rich_db(store))
+
+    # 1. Supplier credit & payment + reverse
+    sup, created = tx.find_or_create_supplier(business_id="b1", name="Sharma ji")
+    assert created is True and "[SUPPLIER]" in sup["area_note"]
+    sc = tx.record_supplier_credit(business_id="b1", supplier_id=sup["id"], amount=5000.0)
+    assert sc["after_balance"] == 5000.0
+    sp = tx.record_supplier_payment(
+        business_id="b1",
+        user_id="u1",
+        supplier_id=sup["id"],
+        supplier_name="Sharma ji",
+        amount=2000.0,
+        payment_method="upi",
+        transaction_date="2026-11-28",
+        operation_id="op-sp-1",
+    )
+    assert sp["after_balance"] == 3000.0
+    assert store["expenses"][0]["category"] == "Supplier Payment"
+
+    # 2. Split partial customer sale (500 total: 200 cash + 300 udhaar)
+    split_res = tx.record_split_customer_sale(
+        business_id="b1",
+        user_id="u1",
+        customer_id="c-nitin",
+        total_amount=500.0,
+        paid_amount=200.0,
+        payment_method="cash",
+        transaction_date="2026-11-28",
+        operation_id="op-split-1",
+    )
+    assert split_res["payment_status"] == "partial"
+    assert split_res["credit_amount"] == 300.0
+    assert split_res["after_balance"] == 300.0
+
+    # 3. Product rename auto-saves old name as alias
+    upd_p = tx.update_product_settings(business_id="b1", product_id="p1", new_name="Coke 750ml")
+    assert upd_p["name"] == "Coke 750ml"
+    assert len(store["product_aliases"]) == 1 and store["product_aliases"][0]["alias"] == "Coca-Cola"
+
+    # 4. Deterministic fallback parser recognizes date range, return, supplier, split & rename
+    p_week = deterministic_fallback_parse("Is hafte kitni sale hui?", "hinglish")
+    assert p_week.operations[0].intent == "query_business" and p_week.operations[0].date_range == "this_week"
+    p_ret = deterministic_fallback_parse("Customer 2 Maggi wapas kar gaya, 28 rupaye wapas diye", "hinglish")
+    assert p_ret.operations[0].intent == "customer_return" and p_ret.operations[0].quantity == 2.0
+    p_sup = deterministic_fallback_parse("Supplier Sharma ji se 5000 ka maal udhaar aaya", "hinglish")
+    assert p_sup.operations[0].intent == "record_supplier_credit" and p_sup.operations[0].total_amount == 5000.0
+    p_split = deterministic_fallback_parse("Nitin ne 500 ka saaman liya, 200 cash diye aur 300 udhaar", "hinglish")
+    assert p_split.operations[0].payment_status == "partial" and p_split.operations[0].paid_amount == 200.0
+    p_ren = deterministic_fallback_parse("Coca-Cola ka naam badal ke Coke 750ml kar do", "hinglish")
+    assert p_ren.operations[0].intent == "update_product_settings" and p_ren.operations[0].new_name == "Coke 750ml"

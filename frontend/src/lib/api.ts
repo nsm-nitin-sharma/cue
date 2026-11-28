@@ -204,6 +204,17 @@ export async function recordCustomerPaymentRemote(payload: {
   });
 }
 
+export async function recordSupplierPaymentRemote(payload: {
+  customer_id: string;
+  amount: number;
+  payment_method: "cash" | "upi" | "bank";
+}) {
+  return apiFetch<Record<string, unknown>>("/suppliers/payments", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function reverseOperationRemote(operationId: string) {
   return apiFetch<{ status: string; reversed: boolean; summary: string }>(
     `/operations/${encodeURIComponent(operationId)}/reverse`,

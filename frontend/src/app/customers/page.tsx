@@ -9,7 +9,16 @@ import { formatTimeIST } from "@/lib/format";
 import type { Customer } from "@/types/cue";
 
 export default function CustomersPage() {
-  const { customers, sales, recordManualCustomerPayment, updateCustomer, todayStats } = useCueWorkspace();
+  const {
+    customers,
+    suppliers,
+    sales,
+    recordManualCustomerPayment,
+    recordManualSupplierPayment,
+    updateCustomer,
+    todayStats,
+  } = useCueWorkspace();
+  const [ledgerTab, setLedgerTab] = useState<"customers" | "suppliers">("customers");
   const [activeCustomer, setActiveCustomer] = useState<Customer | null>(null);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [editName, setEditName] = useState("");
@@ -19,9 +28,10 @@ export default function CustomersPage() {
   const [payMethod, setPayMethod] = useState<"cash" | "upi" | "bank">("cash");
   const [showSettled, setShowSettled] = useState(false);
 
-  const pendingCustomers = customers.filter((c) => c.outstandingBalance > 0.009);
-  const settledCount = customers.length - pendingCustomers.length;
-  const visibleCustomers = showSettled ? customers : pendingCustomers;
+  const activeList = ledgerTab === "customers" ? customers : suppliers;
+  const pendingCustomers = activeList.filter((c) => c.outstandingBalance > 0.009);
+  const settledCount = activeList.length - pendingCustomers.length;
+  const visibleCustomers = showSettled ? activeList : pendingCustomers;
 
   const openEdit = (c: Customer) => {
     setActiveCustomer(null);
@@ -34,10 +44,15 @@ export default function CustomersPage() {
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingCustomer || !editName.trim()) return;
+    const rawNote = editArea.trim();
+    const finalNote =
+      ledgerTab === "suppliers"
+        ? `[SUPPLIER] ${rawNote.replace(/\[SUPPLIER\]/gi, "").trim()}`.trim()
+        : rawNote;
     await updateCustomer(editingCustomer.id, {
       name: editName.trim(),
       phone: editPhone.trim(),
-      areaNote: editArea.trim(),
+      areaNote: finalNote,
     });
     setEditingCustomer(null);
   };
@@ -47,7 +62,11 @@ export default function CustomersPage() {
     if (!activeCustomer) return;
     const amt = Number(payAmount);
     if (amt <= 0) return;
-    recordManualCustomerPayment(activeCustomer.id, amt, payMethod);
+    if (ledgerTab === "suppliers") {
+      recordManualSupplierPayment(activeCustomer.id, amt, payMethod);
+    } else {
+      recordManualCustomerPayment(activeCustomer.id, amt, payMethod);
+    }
     setActiveCustomer(null);
     setPayAmount("");
   };
@@ -59,17 +78,47 @@ export default function CustomersPage() {
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-[11px] font-mono uppercase tracking-wider text-vermilion">
-                Customer Credit Ledger
+                {ledgerTab === "customers" ? "Customer Credit Ledger" : "Wholesale Accounts Payable"}
               </p>
               <h1 className="text-2xl font-semibold tracking-tight text-ink mt-0.5">
-                Udhaar Khata
+                {ledgerTab === "customers" ? "Udhaar Khata" : "Supplier Khata"}
               </h1>
               <p className="text-xs text-ink-secondary mt-1">
-                Track pending customer balances and disambiguate duplicate names safely.
+                {ledgerTab === "customers"
+                  ? "Track pending customer balances and disambiguate duplicate names safely."
+                  : "Track wholesale supplier credit and outgoing supplier payments via voice or UI."}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
+              <div className="inline-flex rounded-xl bg-paper-elevated border border-rule p-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLedgerTab("customers");
+                    setActiveCustomer(null);
+                    setEditingCustomer(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    ledgerTab === "customers" ? "bg-ink text-paper-elevated" : "text-ink-secondary hover:text-ink"
+                  }`}
+                >
+                  Customers ({customers.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLedgerTab("suppliers");
+                    setActiveCustomer(null);
+                    setEditingCustomer(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    ledgerTab === "suppliers" ? "bg-ink text-paper-elevated" : "text-ink-secondary hover:text-ink"
+                  }`}
+                >
+                  Suppliers ({suppliers.length})
+                </button>
+              </div>
               {settledCount > 0 && (
                 <button
                   type="button"
@@ -80,12 +129,17 @@ export default function CustomersPage() {
                       : "bg-paper-elevated text-ink-secondary border-rule hover:border-rule-strong hover:text-ink"
                   }`}
                 >
-                  {showSettled ? `Showing All (${customers.length})` : `Show Settled (${settledCount})`}
+                  {showSettled ? `Showing All (${activeList.length})` : `Show Settled (${settledCount})`}
                 </button>
               )}
               <div className="px-4 py-2.5 rounded-2xl bg-paper-elevated border border-rule">
-                <p className="text-[10px] font-mono uppercase text-ink-muted">Total Receivable</p>
-                <Amount value={todayStats.outstandingTotal} className="text-lg font-semibold text-ochre" />
+                <p className="text-[10px] font-mono uppercase text-ink-muted">
+                  {ledgerTab === "customers" ? "Total Receivable" : "Total Payable"}
+                </p>
+                <Amount
+                  value={ledgerTab === "customers" ? todayStats.outstandingTotal : todayStats.supplierPayableTotal}
+                  className="text-lg font-semibold text-ochre"
+                />
               </div>
             </div>
           </div>
@@ -93,19 +147,26 @@ export default function CustomersPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {visibleCustomers.length === 0 && (
               <div className="md:col-span-2 bg-paper-elevated border border-rule rounded-2xl p-8 text-center text-xs text-ink-muted">
-                {customers.length === 0
-                  ? "No customers in Khata yet. Say “Nitin purchased 10 bottles of Coke but he did not paid” to track Udhaar automatically."
-                  : "All customer Udhaar balances are settled!"}
+                {activeList.length === 0
+                  ? ledgerTab === "customers"
+                    ? "No customers in Khata yet. Say “Nitin purchased 10 bottles of Coke but he did not paid” to track Udhaar automatically."
+                    : "No wholesale suppliers in Khata yet. Say “Supplier Sharma ji se 5,000 ka maal udhaar aaya” to track Accounts Payable."
+                  : ledgerTab === "customers"
+                    ? "All customer Udhaar balances are settled!"
+                    : "All supplier payables are settled!"}
               </div>
             )}
             {visibleCustomers.map((c) => {
-              const customerUdhaar = sales.filter(
-                (s) =>
-                  s.customerId === c.id &&
-                  s.status === "active" &&
-                  s.paymentStatus !== "paid" &&
-                  s.totalAmount - s.paidAmount > 0.009
-              );
+              const customerUdhaar =
+                ledgerTab === "customers"
+                  ? sales.filter(
+                      (s) =>
+                        s.customerId === c.id &&
+                        s.status === "active" &&
+                        s.paymentStatus !== "paid" &&
+                        s.totalAmount - s.paidAmount > 0.009
+                    )
+                  : [];
               return (
                 <div
                   key={c.id}
@@ -160,7 +221,7 @@ export default function CustomersPage() {
                             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium bg-ink text-paper-elevated hover:bg-ink/90 transition-colors"
                           >
                             <IndianRupee className="w-3 h-3" />
-                            Collect
+                            {ledgerTab === "suppliers" ? "Pay Supplier" : "Collect"}
                           </button>
                         )}
                       </div>
@@ -205,7 +266,9 @@ export default function CustomersPage() {
               className="bg-paper-elevated border border-rule-strong rounded-2xl p-5 shadow-dock grid grid-cols-1 sm:grid-cols-4 gap-3 items-end animate-panel-expand"
             >
               <div>
-                <label className="block text-[11px] text-ink-muted mb-1">Customer Name</label>
+                <label className="block text-[11px] text-ink-muted mb-1">
+                  {ledgerTab === "suppliers" ? "Supplier Name" : "Customer Name"}
+                </label>
                 <input
                   type="text"
                   required
@@ -260,7 +323,7 @@ export default function CustomersPage() {
             >
               <div className="flex-1 min-w-[180px]">
                 <p className="text-xs font-semibold text-ink">
-                  Record Payment · {activeCustomer.name}
+                  {ledgerTab === "suppliers" ? "Pay Supplier" : "Record Payment"} · {activeCustomer.name}
                 </p>
                 <p className="text-[11px] text-ink-muted">
                   Current outstanding: <Amount value={activeCustomer.outstandingBalance} />

@@ -93,6 +93,19 @@ class VoicePipelineService:
         )
         return products, aliases, customers
 
+    @staticmethod
+    def _split_customers_and_suppliers(
+        accounts: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        custs: list[dict[str, Any]] = []
+        sups: list[dict[str, Any]] = []
+        for row in accounts:
+            if "[SUPPLIER]" in str(row.get("area_note") or "").upper():
+                sups.append(row)
+            else:
+                custs.append(row)
+        return custs, sups
+
     def _load_business_and_sub(self, business_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
         biz = (
             self.db.table("businesses")
@@ -948,6 +961,18 @@ class VoicePipelineService:
                 reply = f"{qty:g} {product['name']} {who} ke Khata mein Udhaar (₹{total:,.0f}) add ho gayi. Revenue mein abhi add nahi hua."
                 subtitle = f"Udhaar · {who} (Unpaid)"
                 extra_lines = [{"label": "Khata Udhaar", "value": f"₹{total:,.0f} (Not in revenue)", "tone": "ochre"}]
+            elif p_status == "partial" and 0 < paid < total:
+                who = cust_name or "Customer"
+                rem_due = round(total - paid, 2)
+                reply = (
+                    f"{qty:g} {product['name']} ki sale (₹{total:,.0f}): ₹{paid:,.0f} {method_label} aur "
+                    f"₹{rem_due:,.0f} {who} ke Khata mein Udhaar save ho gaya."
+                )
+                subtitle = f"Split · {who} ({method_label} + Udhaar)"
+                extra_lines = [
+                    {"label": f"Paid ({method_label})", "value": f"₹{paid:,.0f}", "tone": "sage"},
+                    {"label": "Khata Udhaar", "value": f"₹{rem_due:,.0f}", "tone": "ochre"},
+                ]
             else:
                 reply = f"{qty:g} {product['name']} ki {method_label} sale (₹{total:,.0f}) save ho gayi."
                 subtitle = f"{cust_name + ' · ' if cust_name else ''}{method_label} Sale"
@@ -1147,8 +1172,13 @@ class VoicePipelineService:
     ) -> VoiceTurnResult:
         receipts: list[dict[str, Any]] = list(prefix_receipts or [])
         replies: list[str] = list(prefix_replies or [])
+        supplier_ops: list[dict[str, Any]] = []
+        processed_indices: set[int] = set()
+        non_supplier_customers, _ = self._split_customers_and_suppliers(customers)
 
         for idx, op in enumerate(operations):
+            if idx in processed_indices:
+                continue
             SecurityPolicyEngine.assert_allowed_intent(op.intent)
             if op.has_ambiguity_or_noise_conflict or op.confidence < 0.85:
                 clar_msg = (
@@ -1191,23 +1221,27 @@ class VoicePipelineService:
                     products=products,
                     aliases=aliases,
                     timezone_name=tz_name,
+                    relative_date=op.relative_date,
+                    date_range=op.date_range,
                 )
                 replies.append(qres["reply"])
                 topic_titles = {
                     "stock_check": "Stock Query Result",
                     "expenses_summary": "Expenses Summary",
-                    "daily_summary": "Daily Ledger Summary",
+                    "daily_summary": "Ledger Summary",
                     "pending_payments": "Pending Khata Dues",
                     "customer_balance": "Customer Khata Balance",
-                    "sales_summary": "Today's Sales Summary",
+                    "supplier_balance": "Supplier Khata Payables",
+                    "sales_summary": "Sales Summary",
                 }
+                period_sub = qres.get("period_label") or txn_date_str
                 receipts.append(
                     {
                         "id": f"slip-{sub_op_id}",
                         "operationId": sub_op_id,
                         "kind": "query",
                         "title": topic_titles.get(op.query_topic or "general", "Ledger Query Result"),
-                        "subtitle": f"{txn_date_str} · Read-Only",
+                        "subtitle": f"{period_sub} · Read-Only",
                         "transactionDate": txn_date_str,
                         "amountINR": qres["amount_inr"],
                         "lines": qres["lines"],
@@ -1285,10 +1319,117 @@ class VoicePipelineService:
                 new_qty = raw_op_qty if raw_op_qty is not None else extract_post_negation_quantity(raw_transcript)
 
                 resolved_corr_pid: str | None = None
-                if op.product_query:
-                    pres_corr = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
+                resolved_corr_prod: dict[str, Any] | None = None
+                variant_cue = bool(
+                    re.search(
+                        r"\b\d+\s*(?:g|gm|gms|grams?|ml|mls|kg|kilo|ltr|litres?|liters?)\b|wali\s+thi",
+                        raw_transcript,
+                        re.IGNORECASE,
+                    )
+                )
+                swap_query = op.product_query
+                if not swap_query and variant_cue and last_kind == "record_sale":
+                    neg_swap = re.search(
+                        r"(?:nahi|nahin|not|ki\s+jagah|instead\s+of)\s+([a-z0-9\s]+?)(?:\s+wali|\s+thi|\s+tha|$)",
+                        raw_transcript,
+                        re.IGNORECASE,
+                    )
+                    if neg_swap:
+                        tail = neg_swap.group(1).strip()
+                        last_pname = str(context_state.get("last_product_name") or "").strip()
+                        brand_prefix = last_pname.split()[0] if last_pname else ""
+                        swap_query = f"{brand_prefix} {tail}".strip() if (brand_prefix and brand_prefix.lower() not in tail.lower()) else tail
+
+                if swap_query:
+                    pres_corr = resolve_product_guarded(swap_query, raw_transcript, products, aliases)
                     if pres_corr.status in {"exact", "verify_alias"} and pres_corr.product:
                         resolved_corr_pid = str(pres_corr.product["id"])
+                        resolved_corr_prod = pres_corr.product
+                    elif pres_corr.status == "ambiguous" and pres_corr.candidates and last_kind == "record_sale":
+                        names = " ya ".join(c["name"] for c in pres_corr.candidates)
+                        msg = f"'{swap_query}' mein {len(pres_corr.candidates)} options mile ({names}). Kaunsa variant swap karna hai?"
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=msg,
+                            language=language,  # type: ignore[arg-type]
+                            receipts=receipts,
+                            clarification={
+                                "kind": "disambiguate_product",
+                                "prompt": msg,
+                                "candidates": [
+                                    {"id": str(c["id"]), "label": c["name"], "meta": f"Stock: {c['current_stock']:g} · ₹{float(c['default_selling_price']):g}", "value": c["name"]}
+                                    for c in pres_corr.candidates
+                                ],
+                            },
+                        )
+
+                # 0. Single-Turn Variant Swap Correction on last sale ("Maggi 70g nahi 250g wali thi")
+                old_sale_op_id = str(context_state.get("last_operation_id") or "")
+                old_sale_pid = str(context_state.get("last_product_id") or "")
+                if (
+                    last_kind == "record_sale"
+                    and old_sale_op_id
+                    and resolved_corr_prod is not None
+                    and resolved_corr_pid
+                    and resolved_corr_pid != old_sale_pid
+                    and not loss_cue
+                    and not expense_cue
+                ):
+                    try:
+                        sw = self.tx.swap_last_sale_variant(
+                            business_id=business_id,
+                            user_id=user_id,
+                            old_operation_id=old_sale_op_id,
+                            new_product_id=resolved_corr_pid,
+                            new_product_name=str(resolved_corr_prod["name"]),
+                            new_unit=str(resolved_corr_prod["base_unit"]),
+                            new_unit_price=float(op.unit_price or resolved_corr_prod.get("default_selling_price") or 0),
+                            new_quantity=float(new_qty) if new_qty is not None else None,
+                            transaction_date=today_str,
+                            operation_id=sub_op_id,
+                        )
+                    except (InsufficientStockError, PolicyBlockedError) as exc:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=exc.message,
+                            language=language,  # type: ignore[arg-type]
+                        )
+                    for pr in products:
+                        if str(pr["id"]) == old_sale_pid:
+                            pr["current_stock"] = float(pr["current_stock"]) + float(sw["old_quantity"])
+                        elif str(pr["id"]) == resolved_corr_pid and sw.get("after_stock") is not None:
+                            pr["current_stock"] = float(sw["after_stock"])
+                    context_state["last_product_id"] = resolved_corr_pid
+                    context_state["last_product_name"] = sw["new_product_name"]
+                    context_state["last_sale_id"] = str(sw["sale_id"])
+                    context_state["last_operation_kind"] = "record_sale"
+                    context_state["last_operation_id"] = sub_op_id
+                    replies.append(
+                        f"Variant swap ho gaya: {sw['old_product_name']} → {sw['new_product_name']} ({sw['quantity']:g} {sw['unit']}, ₹{sw['new_total']:,.0f})."
+                    )
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "correction",
+                            "title": f"Variant Swapped · {sw['new_product_name']}",
+                            "subtitle": f"Replaced {sw['old_product_name']} (Old bill voided)",
+                            "transactionDate": today_str,
+                            "amountINR": sw["new_total"],
+                            "lines": [
+                                {"label": "Old SKU Restored", "value": f"+{sw['old_quantity']:g} {sw['old_product_name']}", "tone": "sage"},
+                                {"label": "New SKU Billed", "value": f"-{sw['quantity']:g} {sw['new_product_name']} @ ₹{sw['unit_price']:g}", "tone": "ochre"},
+                                {"label": "New Total", "value": f"₹{sw['new_total']:,.0f}", "tone": "neutral"},
+                            ],
+                            "status": "corrected",
+                            "reversible": True,
+                        }
+                    )
+                    continue
 
                 # 1. Damage / Expiry Correction
                 if not expense_cue and not sale_cue and (
@@ -1632,6 +1773,241 @@ class VoicePipelineService:
                 self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, raw_transcript, language, stt_provider, stt_confidence, op.model_dump(), "needs_clarification", "tier2", [], res, context_state, user_id)
                 return res
 
+            # Combined Multi-Item Single Bill ("ek saath", "100 mein bechi", grouped invoice)
+            combined_cue = bool(
+                op.is_combined_bill
+                or op.bill_total_amount is not None
+                or re.search(r"\b(ek\s+saath|combined\s+bill|total\s+\d+\s+mein|saare\s+ek)\b", raw_transcript, re.IGNORECASE)
+            )
+            if op.intent == "record_sale" and combined_cue:
+                sale_group_indices = [
+                    j for j in range(idx, len(operations))
+                    if j not in processed_indices and operations[j].intent == "record_sale" and operations[j].product_query
+                ]
+                if len(sale_group_indices) >= 2:
+                    bill_items: list[dict[str, Any]] = []
+                    shared_cust_q = next((operations[j].customer_query for j in sale_group_indices if operations[j].customer_query), None)
+                    shared_bill_tot = next((operations[j].bill_total_amount for j in sale_group_indices if operations[j].bill_total_amount is not None), None)
+                    shared_pm = next((operations[j].payment_method for j in sale_group_indices if operations[j].payment_method), "cash")
+                    shared_ps = next((operations[j].payment_status for j in sale_group_indices if operations[j].payment_status), "paid")
+                    shared_paid = next((operations[j].paid_amount for j in sale_group_indices if operations[j].paid_amount is not None), None)
+
+                    for j in sale_group_indices:
+                        g_op = operations[j]
+                        pres_g = resolve_product_guarded(g_op.product_query, raw_transcript, products, aliases)
+                        if pres_g.status == "ambiguous" and pres_g.candidates:
+                            names = " ya ".join(c["name"] for c in pres_g.candidates)
+                            msg = f"'{g_op.product_query}' ke {len(pres_g.candidates)} options mile: {names}. Combined bill ke liye exact item select karein."
+                            return VoiceTurnResult(
+                                operation_id=operation_id,
+                                status="needs_clarification",
+                                transcript=raw_transcript,
+                                reply=msg,
+                                language=language,  # type: ignore[arg-type]
+                                receipts=receipts,
+                                clarification={
+                                    "kind": "disambiguate_product",
+                                    "prompt": msg,
+                                    "candidates": [
+                                        {"id": str(c["id"]), "label": c["name"], "meta": f"Stock: {c['current_stock']:g} · ₹{float(c['default_selling_price']):g}", "value": c["name"]}
+                                        for c in pres_g.candidates
+                                    ],
+                                },
+                            )
+                        if pres_g.status not in {"exact", "verify_alias"} or not pres_g.product:
+                            return VoiceTurnResult(
+                                operation_id=operation_id,
+                                status="needs_clarification",
+                                transcript=raw_transcript,
+                                reply=f"'{g_op.product_query}' inventory mein nahi mila. Kripya sahi naam bolein.",
+                                language=language,  # type: ignore[arg-type]
+                                receipts=receipts,
+                            )
+                        tp = pres_g.product
+                        q_conv, u_err = convert_to_base_quantity(
+                            quantity=float(g_op.quantity or 1),
+                            spoken_unit=g_op.unit,
+                            base_unit=tp["base_unit"],
+                        )
+                        if u_err or q_conv is None:
+                            return VoiceTurnResult(
+                                operation_id=operation_id,
+                                status="needs_clarification",
+                                transcript=raw_transcript,
+                                reply=u_err or "Unit clear nahi hai.",
+                                language=language,  # type: ignore[arg-type]
+                            )
+                        up = float(g_op.unit_price or tp.get("default_selling_price") or 0)
+                        bill_items.append(
+                            {
+                                "product_id": str(tp["id"]),
+                                "product_name": tp["name"],
+                                "quantity": q_conv,
+                                "unit": tp["base_unit"],
+                                "unit_price": up,
+                            }
+                        )
+
+                    bill_cust_id: str | None = None
+                    bill_cust_name: str | None = None
+                    if shared_cust_q:
+                        cres_b = resolve_customer(shared_cust_q, non_supplier_customers)
+                        if cres_b.status == "exact" and cres_b.customer:
+                            bill_cust_id = str(cres_b.customer["id"])
+                            bill_cust_name = cres_b.customer["name"]
+                        elif shared_ps in {"credit", "partial"}:
+                            new_bc = self.tx.create_customer(business_id=business_id, name=shared_cust_q.title())
+                            customers.append(new_bc)
+                            non_supplier_customers.append(new_bc)
+                            bill_cust_id = str(new_bc["id"])
+                            bill_cust_name = new_bc["name"]
+
+                    try:
+                        cb = self.tx.record_combined_bill(
+                            business_id=business_id,
+                            user_id=user_id,
+                            items=bill_items,
+                            customer_id=bill_cust_id,
+                            bill_total_amount=shared_bill_tot,
+                            paid_amount=shared_paid,
+                            payment_status=shared_ps,
+                            payment_method=shared_pm,
+                            transaction_date=txn_date_str,
+                            operation_id=sub_op_id,
+                            notes=f"{bill_cust_name + ' · ' if bill_cust_name else ''}Combined bill",
+                        )
+                    except InsufficientStockError as exc:
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=exc.message,
+                            language=language,  # type: ignore[arg-type]
+                        )
+
+                    for res_it in cb["items"]:
+                        for pr in products:
+                            if str(pr["id"]) == str(res_it["product_id"]):
+                                pr["current_stock"] = float(res_it["after_stock"])
+                    for j in sale_group_indices:
+                        processed_indices.add(j)
+
+                    context_state["last_sale_id"] = str(cb["sale_id"])
+                    context_state["last_operation_kind"] = "record_sale"
+                    context_state["last_operation_id"] = sub_op_id
+                    items_summary = ", ".join(f"{it['quantity']:g} {it['product_name']}" for it in cb["items"])
+                    disc_txt = f" (₹{cb['discount_amount']:,.0f} discount)" if cb["discount_amount"] > 0 else ""
+                    replies.append(
+                        f"Combined bill ({items_summary}) ₹{cb['total_amount']:,.0f}{disc_txt} save ho gaya."
+                    )
+                    bill_lines = [
+                        {
+                            "label": it["product_name"],
+                            "value": f"-{it['quantity']:g} {it['unit']} @ ₹{it['unit_price']:g} = ₹{it['line_total']:,.0f}",
+                            "tone": "sage",
+                        }
+                        for it in cb["items"]
+                    ]
+                    if cb["discount_amount"] > 0:
+                        bill_lines.append({"label": "Discount", "value": f"-₹{cb['discount_amount']:,.0f}", "tone": "ochre"})
+                    if cb["payment_status"] == "partial":
+                        bill_lines.append({"label": "Paid / Udhaar", "value": f"₹{cb['paid_amount']:,.0f} / ₹{cb['credit_amount']:,.0f}", "tone": "ochre"})
+                    elif cb["payment_status"] == "credit":
+                        bill_lines.append({"label": "Khata Udhaar", "value": f"₹{cb['total_amount']:,.0f}", "tone": "ochre"})
+                    else:
+                        pm_lbl = "Online" if shared_pm == "upi" else ("Bank" if shared_pm == "bank" else "Cash")
+                        bill_lines.append({"label": "Payment", "value": pm_lbl, "tone": "sage"})
+
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "sale",
+                            "title": f"Combined Bill · {len(cb['items'])} Items",
+                            "subtitle": f"{bill_cust_name + ' · ' if bill_cust_name else ''}Single Invoice",
+                            "transactionDate": txn_date_str,
+                            "amountINR": cb["total_amount"],
+                            "lines": bill_lines,
+                            "status": "saved",
+                            "reversible": True,
+                        }
+                    )
+                    continue
+
+            # Un-itemized Split / Partial Customer Sale ("Nitin ne 500 ka saaman liya, 200 cash diye aur 300 udhaar")
+            if (
+                op.intent == "record_sale"
+                and not op.product_query
+                and op.customer_query
+                and (op.total_amount or op.paid_amount)
+            ):
+                cres_sp = resolve_customer(op.customer_query, non_supplier_customers)
+                if cres_sp.status == "exact" and cres_sp.customer:
+                    cust_sp = cres_sp.customer
+                elif cres_sp.status == "ambiguous" and cres_sp.candidates:
+                    names = " ya ".join(c["name"] for c in cres_sp.candidates)
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"Khata mein {len(cres_sp.candidates)} {op.customer_query} hain ({names}). Kaunse customer?",
+                        language=language,  # type: ignore[arg-type]
+                        clarification={
+                            "kind": "disambiguate_customer",
+                            "prompt": f"Select customer for '{op.customer_query}'",
+                            "candidates": [
+                                {"id": str(c["id"]), "label": c["name"], "meta": f"Due ₹{float(c['outstanding_balance']):,.0f}", "value": c["name"]}
+                                for c in cres_sp.candidates
+                            ],
+                        },
+                    )
+                else:
+                    cust_sp = self.tx.create_customer(business_id=business_id, name=op.customer_query.title())
+                    customers.append(cust_sp)
+                    non_supplier_customers.append(cust_sp)
+
+                tot_sp = float(op.total_amount or op.paid_amount or 0)
+                paid_sp = float(op.paid_amount or 0) if op.payment_status == "partial" else (tot_sp if op.payment_status != "credit" else 0.0)
+                pm_sp = op.payment_method or "cash"
+                sp_res = self.tx.record_split_customer_sale(
+                    business_id=business_id,
+                    user_id=user_id,
+                    customer_id=str(cust_sp["id"]),
+                    total_amount=tot_sp,
+                    paid_amount=paid_sp,
+                    payment_method=pm_sp,
+                    transaction_date=txn_date_str,
+                    operation_id=sub_op_id,
+                )
+                context_state["last_sale_id"] = str(sp_res["sale_id"])
+                context_state["last_operation_kind"] = "record_sale"
+                context_state["last_operation_id"] = sub_op_id
+                context_state["last_customer_id"] = str(cust_sp["id"])
+                context_state["last_customer_name"] = cust_sp["name"]
+                pm_lbl = "Online" if pm_sp == "upi" else ("Bank" if pm_sp == "bank" else "Cash")
+                replies.append(
+                    f"{cust_sp['name']} ki ₹{sp_res['total_amount']:,.0f} sale save ho gayi: ₹{sp_res['paid_amount']:,.0f} {pm_lbl} aur ₹{sp_res['credit_amount']:,.0f} Udhaar (New Balance: ₹{sp_res['after_balance']:,.0f})."
+                )
+                receipts.append(
+                    {
+                        "id": f"slip-{sub_op_id}",
+                        "operationId": sub_op_id,
+                        "kind": "sale",
+                        "title": f"Split Sale · {cust_sp['name']}",
+                        "subtitle": f"{pm_lbl} + Khata Udhaar",
+                        "transactionDate": txn_date_str,
+                        "amountINR": sp_res["total_amount"],
+                        "lines": [
+                            {"label": f"Paid ({pm_lbl})", "value": f"₹{sp_res['paid_amount']:,.0f}", "tone": "sage"},
+                            {"label": "Khata Udhaar", "value": f"₹{sp_res['credit_amount']:,.0f}", "tone": "ochre"},
+                            {"label": "Total Khata Balance", "value": f"₹{sp_res['after_balance']:,.0f}", "tone": "neutral"},
+                        ],
+                        "status": "saved",
+                        "reversible": True,
+                    }
+                )
+                continue
+
             # Resolve Product (for stock & sale intents)
             if op.intent in {"inventory_receive", "inventory_damage", "inventory_expiry", "record_sale"}:
                 target_prod: dict[str, Any] | None = None
@@ -1909,7 +2285,7 @@ class VoicePipelineService:
                     resolved_customer_id: str | None = None
                     resolved_customer_name: str | None = None
                     if op.intent == "record_sale" and op.customer_query:
-                        cres_sale = resolve_customer(op.customer_query, customers)
+                        cres_sale = resolve_customer(op.customer_query, non_supplier_customers)
                         if cres_sale.status == "ambiguous" and cres_sale.candidates:
                             names = " ya ".join(c["name"] for c in cres_sale.candidates)
                             msg = f"Khata mein {len(cres_sale.candidates)} {op.customer_query} hain ({names}). Kaunse customer ke liye?"
@@ -2063,6 +2439,213 @@ class VoicePipelineService:
                 receipts.append(slip)
                 replies.append(rep)
 
+            elif op.intent == "customer_return":
+                if not op.product_query and not context_state.get("last_product_id"):
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply="Kaunsa product wapas aaya hai aur kitni quantity hai?",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                ret_prod: dict[str, Any] | None = None
+                if op.product_query:
+                    pres_ret = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
+                    if pres_ret.status == "ambiguous" and pres_ret.candidates:
+                        names = " ya ".join(c["name"] for c in pres_ret.candidates)
+                        msg = f"'{op.product_query}' ke {len(pres_ret.candidates)} options mile: {names}. Kaunsa product wapas aaya hai?"
+                        return VoiceTurnResult(
+                            operation_id=operation_id,
+                            status="needs_clarification",
+                            transcript=raw_transcript,
+                            reply=msg,
+                            language=language,  # type: ignore[arg-type]
+                            receipts=receipts,
+                            clarification={
+                                "kind": "disambiguate_product",
+                                "prompt": msg,
+                                "candidates": [
+                                    {"id": str(c["id"]), "label": c["name"], "meta": f"Stock: {c['current_stock']:g} · ₹{float(c['default_selling_price']):g}", "value": c["name"]}
+                                    for c in pres_ret.candidates
+                                ],
+                            },
+                        )
+                    if pres_ret.status in {"exact", "verify_alias"} and pres_ret.product:
+                        ret_prod = pres_ret.product
+                else:
+                    ret_prod = next((p for p in products if str(p["id"]) == str(context_state.get("last_product_id"))), None)
+
+                if not ret_prod:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"'{op.product_query or 'Product'}' inventory mein nahi mila. Kripya sahi naam bolein.",
+                        language=language,  # type: ignore[arg-type]
+                    )
+
+                ret_qty, u_err = convert_to_base_quantity(
+                    quantity=float(op.quantity or 1),
+                    spoken_unit=op.unit,
+                    base_unit=ret_prod["base_unit"],
+                )
+                if u_err or ret_qty is None:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=u_err or "Quantity aur unit saaf bolein.",
+                        language=language,  # type: ignore[arg-type]
+                    )
+
+                ret_cust_id: str | None = None
+                ret_cust_name: str | None = None
+                if op.customer_query:
+                    cres_ret = resolve_customer(op.customer_query, non_supplier_customers)
+                    if cres_ret.status == "exact" and cres_ret.customer:
+                        ret_cust_id = str(cres_ret.customer["id"])
+                        ret_cust_name = cres_ret.customer["name"]
+
+                refund_amt = (
+                    float(op.total_amount)
+                    if op.total_amount is not None
+                    else round(ret_qty * float(op.unit_price or ret_prod.get("default_selling_price") or 0), 2)
+                )
+                refund_m = op.payment_method or "cash"
+                ret_res = self.tx.record_customer_return(
+                    business_id=business_id,
+                    user_id=user_id,
+                    product_id=str(ret_prod["id"]),
+                    product_name=ret_prod["name"],
+                    quantity=ret_qty,
+                    unit=ret_prod["base_unit"],
+                    refund_amount=refund_amt,
+                    refund_method=refund_m,
+                    customer_id=ret_cust_id,
+                    transaction_date=txn_date_str,
+                    operation_id=sub_op_id,
+                )
+                ret_prod["current_stock"] = float(ret_res["after_stock"])
+                context_state["last_product_id"] = str(ret_prod["id"])
+                context_state["last_product_name"] = ret_prod["name"]
+                context_state["last_operation_kind"] = "customer_return"
+                context_state["last_operation_id"] = sub_op_id
+                refund_lbl = (
+                    "Khata Udhaar"
+                    if refund_m == "credit"
+                    else ("Online" if refund_m == "upi" else ("Bank" if refund_m == "bank" else "Cash"))
+                )
+                replies.append(
+                    f"{ret_qty:g} {ret_prod['name']} wapas li gayi, ₹{ret_res['refund_amount']:,.0f} {refund_lbl} adjust hua. Updated stock: {ret_res['after_stock']:g}."
+                )
+                ret_lines = [
+                    {"label": "Returned Stock", "value": f"+{ret_qty:g} {ret_prod['base_unit']}", "tone": "sage"},
+                    {"label": f"Refund ({refund_lbl})", "value": f"₹{ret_res['refund_amount']:,.0f}", "tone": "ochre"},
+                    {"label": "Stock Level", "value": f"{ret_res['before_stock']:g} → {ret_res['after_stock']:g}", "tone": "neutral"},
+                ]
+                receipts.append(
+                    {
+                        "id": f"slip-{sub_op_id}",
+                        "operationId": sub_op_id,
+                        "kind": "receive",
+                        "title": f"Customer Return · {ret_prod['name']}",
+                        "subtitle": f"{ret_cust_name + ' · ' if ret_cust_name else ''}Wapsi & Refund",
+                        "transactionDate": txn_date_str,
+                        "amountINR": ret_res["refund_amount"],
+                        "lines": ret_lines,
+                        "status": "saved",
+                        "reversible": True,
+                    }
+                )
+
+            elif op.intent in {"record_supplier_credit", "record_supplier_payment"}:
+                sup_name = (op.customer_query or "").strip()
+                if not sup_name:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply="Kis supplier ka naam aur amount record karna hai?",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                sup_amt = float(op.total_amount or op.paid_amount or op.unit_price or 0)
+                if sup_amt <= 0:
+                    return VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=raw_transcript,
+                        reply=f"Supplier {sup_name} ke liye kitne rupaye record karne hain?",
+                        language=language,  # type: ignore[arg-type]
+                    )
+                sup_row, created_new = self.tx.find_or_create_supplier(business_id=business_id, name=sup_name)
+                if created_new:
+                    customers.append(sup_row)
+                if op.intent == "record_supplier_credit":
+                    sc = self.tx.record_supplier_credit(
+                        business_id=business_id,
+                        supplier_id=str(sup_row["id"]),
+                        amount=sup_amt,
+                    )
+                    supplier_ops.append({"type": "credit", "supplier_id": str(sup_row["id"]), "amount": sup_amt})
+                    context_state["last_operation_kind"] = "record_supplier_credit"
+                    context_state["last_operation_id"] = sub_op_id
+                    replies.append(
+                        f"Supplier {sup_row['name']} ke Khata mein ₹{sup_amt:,.0f} payable add ho gaya (Total Payable: ₹{sc['after_balance']:,.0f})."
+                    )
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "receive",
+                            "title": f"Supplier Credit · {sup_row['name']}",
+                            "subtitle": "Wholesale Accounts Payable",
+                            "transactionDate": txn_date_str,
+                            "amountINR": sup_amt,
+                            "lines": [
+                                {"label": "Credit Added", "value": f"+₹{sup_amt:,.0f}", "tone": "ochre"},
+                                {"label": "Total Payable", "value": f"₹{sc['after_balance']:,.0f}", "tone": "neutral"},
+                            ],
+                            "status": "saved",
+                            "reversible": True,
+                        }
+                    )
+                else:
+                    pm_sup = op.payment_method or "cash"
+                    pm_lbl = "Online" if pm_sup == "upi" else ("Bank" if pm_sup == "bank" else "Cash")
+                    sp = self.tx.record_supplier_payment(
+                        business_id=business_id,
+                        user_id=user_id,
+                        supplier_id=str(sup_row["id"]),
+                        supplier_name=str(sup_row["name"]),
+                        amount=sup_amt,
+                        payment_method=pm_sup,
+                        transaction_date=txn_date_str,
+                        operation_id=sub_op_id,
+                    )
+                    supplier_ops.append({"type": "payment", "supplier_id": str(sup_row["id"]), "amount": sup_amt})
+                    context_state["last_operation_kind"] = "record_supplier_payment"
+                    context_state["last_operation_id"] = sub_op_id
+                    replies.append(
+                        f"Supplier {sup_row['name']} ko ₹{sup_amt:,.0f} ({pm_lbl}) pay kar diya gaya. Remaining Payable: ₹{sp['after_balance']:,.0f}."
+                    )
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "expense",
+                            "title": f"Supplier Paid · {sup_row['name']}",
+                            "subtitle": f"Via {pm_lbl}",
+                            "transactionDate": txn_date_str,
+                            "amountINR": sup_amt,
+                            "lines": [
+                                {"label": "Paid Amount", "value": f"₹{sup_amt:,.0f} ({pm_lbl})", "tone": "sage"},
+                                {"label": "Remaining Payable", "value": f"₹{sp['after_balance']:,.0f}", "tone": "ochre" if sp["after_balance"] > 0 else "sage"},
+                            ],
+                            "status": "saved",
+                            "reversible": True,
+                        }
+                    )
+
             elif op.intent in {"create_customer", "update_customer", "record_udhaar_credit", "record_customer_payment"}:
                 if op.intent == "create_customer" and op.customer_query:
                     new_c = self.tx.create_customer(
@@ -2088,7 +2671,7 @@ class VoicePipelineService:
                         }
                     )
                 else:
-                    cres = resolve_customer(op.customer_query, customers)
+                    cres = resolve_customer(op.customer_query, non_supplier_customers)
                     if cres.status == "ambiguous" and cres.candidates:
                         names = " ya ".join(c["name"] for c in cres.candidates)
                         msg = f"Khata mein {len(cres.candidates)} {op.customer_query} hain ({names}). Kaunse customer ke liye?"
@@ -2120,14 +2703,38 @@ class VoicePipelineService:
                         )
                     cust = cres.customer
                     if op.intent == "update_customer":
-                        self.tx.update_customer(
+                        updated_cust = self.tx.update_customer(
                             business_id=business_id,
                             customer_id=str(cust["id"]),
+                            name=op.new_name,
                             phone=op.phone,
                             area_note=op.area_note,
                         )
-                        rep = f"{cust['name']} ki Khata details update ho gayi hain."
+                        if op.new_name:
+                            cust["name"] = updated_cust["name"]
+                            rep = f"{cust['name']} ka naam aur details update ho gayi hain."
+                        else:
+                            rep = f"{cust['name']} ki Khata details update ho gayi hain."
                         replies.append(rep)
+                        edit_lines = []
+                        if op.new_name:
+                            edit_lines.append({"label": "New Name", "value": str(updated_cust["name"]), "tone": "sage"})
+                        if op.phone is not None:
+                            edit_lines.append({"label": "Phone", "value": str(op.phone), "tone": "sage"})
+                        if op.area_note is not None:
+                            edit_lines.append({"label": "Note", "value": str(op.area_note), "tone": "neutral"})
+                        receipts.append(
+                            {
+                                "id": f"slip-{sub_op_id}",
+                                "operationId": sub_op_id,
+                                "kind": "payment",
+                                "title": f"Customer Updated · {updated_cust['name']}",
+                                "subtitle": "Voice Profile Update",
+                                "transactionDate": txn_date_str,
+                                "lines": edit_lines or [{"label": "Profile", "value": "Updated", "tone": "sage"}],
+                                "status": "saved",
+                            }
+                        )
                     elif op.intent == "record_udhaar_credit":
                         amt = float(op.total_amount or op.unit_price or 0)
                         if amt <= 0:
@@ -2246,15 +2853,42 @@ class VoicePipelineService:
                     )
                 if pres.status in {"exact", "verify_alias"} and pres.product:
                     p = pres.product
-                    self.tx.update_product_settings(
+                    old_pname = str(p["name"])
+                    updated_p = self.tx.update_product_settings(
                         business_id=business_id,
                         product_id=str(p["id"]),
+                        new_name=op.new_name,
                         cost_price=op.cost_price,
                         selling_price=op.selling_price if op.selling_price is not None else op.unit_price,
                         low_stock_threshold=op.low_stock_threshold,
                     )
-                    rep = f"{p['name']} ki settings update ho gayi hain."
+                    if op.new_name and updated_p.get("name"):
+                        p["name"] = updated_p["name"]
+                        rep = f"{old_pname} ka naam badal kar {updated_p['name']} kar diya gaya."
+                    else:
+                        rep = f"{p['name']} ki settings update ho gayi hain."
                     replies.append(rep)
+                    pset_lines = []
+                    if op.new_name and updated_p.get("name"):
+                        pset_lines.append({"label": "Renamed", "value": f"{old_pname} → {updated_p['name']}", "tone": "sage"})
+                    if op.selling_price is not None or op.unit_price is not None:
+                        pset_lines.append({"label": "Selling Price", "value": f"₹{float(updated_p.get('default_selling_price') or 0):g}", "tone": "neutral"})
+                    if op.cost_price is not None:
+                        pset_lines.append({"label": "Cost Price", "value": f"₹{float(updated_p.get('default_cost_price') or 0):g}", "tone": "neutral"})
+                    if op.low_stock_threshold is not None:
+                        pset_lines.append({"label": "Low-Stock Alert", "value": f"{float(op.low_stock_threshold):g}", "tone": "neutral"})
+                    receipts.append(
+                        {
+                            "id": f"slip-{sub_op_id}",
+                            "operationId": sub_op_id,
+                            "kind": "receive",
+                            "title": f"Product Updated · {updated_p.get('name', p['name'])}",
+                            "subtitle": "Catalog & Alias Updated",
+                            "transactionDate": txn_date_str,
+                            "lines": pset_lines or [{"label": "Catalog", "value": "Updated", "tone": "sage"}],
+                            "status": "saved",
+                        }
+                    )
                 else:
                     return VoiceTurnResult(
                         operation_id=operation_id,
@@ -2341,7 +2975,25 @@ class VoicePipelineService:
             language=language,  # type: ignore[arg-type]
             receipts=receipts,
         )
-        self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, raw_transcript, language, stt_provider, stt_confidence, {"ops_count": len(operations)}, "executed", "tier1", receipts, res, context_state, user_id)
+        self._finalize_turn(
+            conv_id,
+            business_id,
+            today_str,
+            operation_id,
+            payload_hash,
+            raw_transcript,
+            language,
+            stt_provider,
+            stt_confidence,
+            {"ops_count": len(operations)},
+            "executed",
+            "tier1",
+            receipts,
+            res,
+            context_state,
+            user_id,
+            extra_response_fields={"supplier_ops": supplier_ops} if supplier_ops else None,
+        )
         return res
 
     def confirm_tier3(
@@ -2478,6 +3130,7 @@ class VoicePipelineService:
         result: VoiceTurnResult,
         context_state: dict[str, Any],
         user_id: str,
+        extra_response_fields: dict[str, Any] | None = None,
     ) -> None:
         self.memory.update_context_state(conversation_id=conv_id, state=context_state)
         self.memory.append_message(
@@ -2490,6 +3143,9 @@ class VoicePipelineService:
             linked_operation_id=operation_id,
             ui_payload=result.model_dump(),
         )
+        rp = result.model_dump()
+        if extra_response_fields:
+            rp.update(extra_response_fields)
         self.tx.log_voice_transaction(
             business_id=business_id,
             conversation_id=conv_id,
@@ -2504,7 +3160,7 @@ class VoicePipelineService:
             validation_status=validation_status,
             risk_tier=risk_tier,
             affected_records=affected_records,
-            response_payload=result.model_dump(),
+            response_payload=rp,
             audit_trail=[{"action": validation_status, "timestamp": today_str}],
             user_id=user_id,
         )

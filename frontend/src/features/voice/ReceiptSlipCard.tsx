@@ -1,17 +1,22 @@
 "use client";
 
 import React, { useState } from "react";
-import { RotateCcw, ShieldCheck, ShieldAlert, Clock, History } from "lucide-react";
+import { RotateCcw, ShieldCheck, ShieldAlert, Clock, History, FileDown } from "lucide-react";
 import { formatINR, formatShortOp } from "@/lib/format";
+import { exportReceiptSlipAsPdf } from "@/lib/pdfBill";
 import { StatusPill } from "@/components/ui/LedgerPrimitives";
 import type { ReceiptSlip } from "@/types/cue";
 
 export function ReceiptSlipCard({
   receipt,
   onUndo,
+  storeName,
+  storeCity,
 }: {
   receipt: ReceiptSlip;
   onUndo: (operationId: string) => void;
+  storeName?: string;
+  storeCity?: string;
 }) {
   const [showAudit, setShowAudit] = useState(false);
 
@@ -109,6 +114,17 @@ export function ReceiptSlipCard({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {receipt.kind !== "blocked" && (
+            <button
+              type="button"
+              onClick={() => exportReceiptSlipAsPdf(receipt, { name: storeName, city: storeCity })}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-rule hover:border-rule-strong hover:bg-paper-subtle text-ink-secondary hover:text-ink transition-colors"
+              title="Print / Save Bill as PDF"
+            >
+              <FileDown className="w-3 h-3" />
+              PDF
+            </button>
+          )}
           {receipt.auditTrail && receipt.auditTrail.length > 0 && (
             <button
               type="button"

@@ -274,6 +274,26 @@ _EN_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         r"Received \2 (\3) from \1 and updated the Sales ledger. Remaining balance: \4.",
     ),
     (
+        re.compile(r"^Variant swap ho gaya: (.+?) → (.+?) \(([\d.]+) (\S+), (₹[\d,]+)\)\.$"),
+        r"Swapped item from \1 to \2 (\3 \4, \5).",
+    ),
+    (
+        re.compile(r"^([\d.]+) (.+?) wapas li gayi, (₹[\d,]+) (.+?) adjust hua\. Updated stock: ([\d.]+)\.$"),
+        r"Processed customer return for \1 \2 (\3 adjusted via \4). Updated stock: \5.",
+    ),
+    (
+        re.compile(r"^Supplier (.+?) ke Khata mein (₹[\d,]+) payable add ho gaya \(Total Payable: (₹[\d,]+)\)\.$"),
+        r"Recorded \2 wholesale credit from supplier \1 (Total Payable: \3).",
+    ),
+    (
+        re.compile(r"^Supplier (.+?) ko (₹[\d,]+) \((.+?)\) pay kar diya gaya\. Remaining Payable: (₹[\d,]+)\.$"),
+        r"Paid \2 (\3) to supplier \1. Remaining payable: \4.",
+    ),
+    (
+        re.compile(r"^(.+?) ka naam badal kar (.+?) kar diya gaya\.$"),
+        r"Renamed \1 to \2.",
+    ),
+    (
         re.compile(r"^Sale payment update ho gaya: (₹[\d,]+) \((.+?) → (.+?)\)\.$"),
         r"Updated sale payment: \1 (\2 → \3).",
     ),

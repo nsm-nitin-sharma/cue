@@ -105,3 +105,48 @@ def resolve_relative_date(
         return today - timedelta(days=int(m.group(1)))
 
     return today
+
+
+def resolve_date_range(
+    *,
+    date_range: str | None = None,
+    relative_date: str | None = None,
+    timezone_name: str = "Asia/Kolkata",
+) -> tuple[date, date, str]:
+    """
+    Resolve multi-day or single-day expressions into (start_date, end_date, label_hinglish).
+    """
+    today = get_business_today(timezone_name)
+    key = (date_range or relative_date or "").strip().lower()
+    if not key or key in {"today", "aaj"}:
+        return today, today, "Aaj"
+
+    if key in {"yesterday", "kal", "beeta kal"}:
+        d = today - timedelta(days=1)
+        return d, d, "Kal"
+    if key in {"day_before", "parso", "parsoh", "day before yesterday"}:
+        d = today - timedelta(days=2)
+        return d, d, "Parso"
+    if key in {"this_week", "is hafte", "this week", "iss hafte", "hafte"}:
+        start = today - timedelta(days=today.weekday())
+        return start, today, "Is hafte"
+    if key in {"last_week", "pichle hafte", "last week"}:
+        this_mon = today - timedelta(days=today.weekday())
+        last_mon = this_mon - timedelta(days=7)
+        last_sun = this_mon - timedelta(days=1)
+        return last_mon, last_sun, "Pichle hafte"
+    if key in {"last_7_days", "pichle 7 din", "last 7 days"}:
+        return today - timedelta(days=6), today, "Pichle 7 dinon mein"
+    if key in {"this_month", "is mahine", "iss mahine", "this month", "mahine"}:
+        return today.replace(day=1), today, "Is mahine"
+    if key in {"last_month", "pichle mahine", "last month"}:
+        first_this = today.replace(day=1)
+        last_prev = first_this - timedelta(days=1)
+        first_prev = last_prev.replace(day=1)
+        return first_prev, last_prev, "Pichle mahine"
+    if key in {"last_30_days", "pichle 30 din", "last 30 days"}:
+        return today - timedelta(days=29), today, "Pichle 30 dinon mein"
+
+    resolved = resolve_relative_date(key, timezone_name)
+    label = resolved.isoformat() if resolved != today else "Aaj"
+    return resolved, resolved, label

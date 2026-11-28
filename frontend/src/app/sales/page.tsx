@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { FileDown, RotateCcw } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Amount, StatusPill } from "@/components/ui/LedgerPrimitives";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
 import { formatINR, formatShortOp, getTodayIST, isDateInPeriod, type TimePeriodFilter } from "@/lib/format";
+import { exportSaleBillAsPdf } from "@/lib/pdfBill";
 
 const SALES_FILTERS: { code: TimePeriodFilter; label: string }[] = [
   { code: "today", label: "Today" },
@@ -16,7 +17,7 @@ const SALES_FILTERS: { code: TimePeriodFilter; label: string }[] = [
 ];
 
 export default function SalesPage() {
-  const { sales, customerPayments, products, undoReceipt } = useCueWorkspace();
+  const { sales, customerPayments, products, store, undoReceipt } = useCueWorkspace();
   const [period, setPeriod] = useState<TimePeriodFilter>("today");
   const todayYmd = useMemo(() => getTodayIST(), []);
 
@@ -233,16 +234,27 @@ export default function SalesPage() {
                           </StatusPill>
                         </td>
                         <td className="py-3.5 px-4 text-right">
-                          {s.status !== "voided" && (
+                          <div className="inline-flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={() => undoReceipt(s.operationId)}
+                              onClick={() => exportSaleBillAsPdf(s, { name: store.name, city: store.city })}
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rule text-xs text-ink-secondary hover:text-ink hover:bg-paper-subtle"
+                              title="Print / Export PDF Bill"
                             >
-                              <RotateCcw className="w-3 h-3" />
-                              Reverse
+                              <FileDown className="w-3 h-3" />
+                              PDF
                             </button>
-                          )}
+                            {s.status !== "voided" && (
+                              <button
+                                type="button"
+                                onClick={() => undoReceipt(s.operationId)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rule text-xs text-ink-secondary hover:text-ink hover:bg-paper-subtle"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                Reverse
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

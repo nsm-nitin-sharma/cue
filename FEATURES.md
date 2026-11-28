@@ -2,7 +2,7 @@
 
 > **Purpose:** Living source of truth for every discussed feature, UI/UX enhancement, security control, bug fix, and upcoming capability in **Cue**.  
 > **Legend:** `[x]` Implemented & Verified | `[~]` Foundation / Schema Ready (UI or Integration Pending) | `[ ]` Not Implemented Yet  
-> **Last Updated:** 2026-11-27 (Branch `AI`)
+> **Last Updated:** 2026-11-28 (Branch `AI`)
 
 ---
 
@@ -95,6 +95,8 @@
 - [x] **Quantity Corrections (`correct_sale_quantity` / expense amount edits):** Handles post-negation targets (*"20 pepsi nahi 10 hi biki"*, *"Actually 7 the"*) while ignoring product weight specs (`250 gram`) and keeping corrected sales `status="active"` so Today & Sales Ledger revenue immediately reflects the updated amount
 - [x] **One-Tap Receipt Reversal (`POST /api/v1/operations/{operation_id}/reverse`):** Reverses active sales, expenses, payments, and stock movements cleanly while logging audit history
 - [x] **30-Day Cross-Day Memory & `> 30 Days` Boundary Guard:** Queries last 30 days of chat + ledger; politely redirects `> 30 days` references to permanent Reports views
+- [x] **Multi-Day & Date-Range Voice Queries (`time_utils.py` + `QueryEngine`):** Natural queries for `"Is hafte kitni sale hui?"`, `"Is mahine ka total kharcha batao"`, `"Kal kitni Maggi biki thi?"`, `"Pichle 7 din"`, `"Pichle mahine"`, and period-wide profit summaries directly in chat
+- [x] **Single-Turn Variant Swap Correction (`swap_last_sale_variant`):** Voice shortcuts like `"Maggi 70g nahi 250g wali thi"` atomically reverse the mistaken sale (restoring stock & balance) and re-record on the corrected variant SKU in one turn
 - [x] **Business Day Replay:** Daily narration, relative dates (`aaj`, `kal`, `parso`), `transaction_date` vs `created_at` separation
 
 ---
@@ -107,9 +109,15 @@
   - [x] **Add Product, Edit Product Modal (`PATCH /api/v1/inventory/products/{id}`), & Clear Unused Items**
 - [x] **Voice & UI Sales (`/sales`):**
   - [x] Cash, Online (stored as `"upi"` in DB, displayed everywhere as `"Online"`), Partial, and Udhaar sales
+  - [x] **Combined Multi-Item Single Bill / Invoice (`record_combined_bill`):** Commands like `"Ramesh ko 2 Maggi aur 1 Coke ek saath 100 mein bechi"` record one unified `sales` bill with multiple `sale_items`, proportional lump-sum discount allocation, and one-tap group Reversal
+  - [x] **Split / Partial Payment in One Breath (`record_split_customer_sale`):** Supports mixed cash/online + Khata Udhaar in a single breath (`"Nitin ne 500 ka saaman liya, 200 cash diye aur 300 udhaar"`) for both itemized and un-itemized counter sales
+  - [x] **Customer Returns / Partial Refunds / Wapsi (`record_customer_return`):** `"Customer 2 Maggi wapas kar gaya, 28 rupaye wapas diye"` restores returned stock to inventory and adjusts Cash/Online refunds or customer Khata Udhaar (with full Undo/Reversal)
+  - [x] **One-Tap PDF Bill Export (`pdfBill.ts`):** Printable A4 / Save-as-PDF bills on every Voice Receipt slip and Sales Ledger row with store letterhead, line items, and balance due
   - [x] Sales Ledger filters (period / payment type), real-time profit & revenue summary (filtering strictly on `status === "active"`), **Item-Specific Sales Queries** (*"Aaj Maggie ki kitni sales hui?"*), and clear `"Cash"` / `"Online"` / `"Udhaar"` pills
 - [x] **Voice & UI Khata (`/customers`):**
   - [x] Create customer, query balances, add direct Udhaar (*"Ramesh ke khate mein 500 likh do"*), collect repayments (`POST /api/v1/customers/payments`), per-customer Khata history view, & **Edit Customer Modal (`PATCH /api/v1/customers/{id}`)**
+  - [x] **Supplier Credit / Wholesale Khata (`Accounts Payable`):** Separate **Suppliers (Payable)** tab in Khata (`POST /api/v1/suppliers/payments`) alongside voice support (*"Supplier Sharma ji se 5,000 ka maal udhaar aaya"*, *"Supplier Sharma ji ko 2,000 diye"*, *"Suppliers ko kitna dena baki hai?"*), isolated cleanly from Customer Receivables
+  - [x] **Voice-Driven Record Edits & Renames:** Rename products with automatic alias preservation (*"Coca-Cola ka naam badal ke Coke 750ml kar do"*) and update customer phone/area (*"Rahul ka phone number 9876543210 update karo"*) via voice
   - [x] **Udhaar Repayment → Sales & Revenue Inclusion (`record_customer_payment`):** Paying any Udhaar (via Voice or Khata UI) automatically FIFO-settles unpaid/partial `sales` rows (`Udhaar` → `Cash`/`Online`/`Partial`), converts prior-day/opening-balance repayments cleanly into Today's Collected Revenue & Sales totals without double-counting, and supports clean Reversal rollback
 - [x] **Voice & UI Expenses (`/expenses`):**
   - [x] Categorized daily shop expenses, Voice & Manual expense entry (`POST /api/v1/expenses`), period filters, & **Edit Expense Modal (`PATCH /api/v1/expenses/{id}`)**
@@ -133,7 +141,7 @@
 ## 8. Automated Testing & Verification
 
 - [x] Security Tests (`test_security_and_policy.py`): Destructive-intent blocking, prompt-injection defense, Pydantic firewall, `₹5,000` confirmation gate, audio magic-byte validation, PII redaction (**6 tests passing**)
-- [x] Domain & Resolver Tests (`test_domain_and_resolver.py`): Hinglish numbers/fractions, unit converter, 30-day memory guard, multi-variant disambiguation with existing aliases & LLM transcript guard, `70g nahi 250 gram` quantity exclusion, Cash ↔ Online corrections, batch parsing, expense/stock queries (**9 tests passing**)
+- [x] Domain & Resolver Tests (`test_domain_and_resolver.py`): Hinglish numbers/fractions, unit converter, 30-day memory guard, multi-variant disambiguation with existing aliases & LLM transcript guard, `70g nahi 250 gram` quantity exclusion, Cash ↔ Online corrections, batch parsing, expense/stock/multi-day queries, returns, variant swaps, supplier khata, combined bills, split payments, and voice renames (**19 tests passing**)
 - [x] Frontend Build & Typecheck: `npx tsc --noEmit` & `npm run build` clean (11/11 routes)
 
 ---
@@ -146,5 +154,4 @@
 - [ ] **Section 10 Predictive Analytics & BI Dashboard:** Velocity spike detection, automated reorder suggestions, margin trend charts, and `business_insights_events` surfacing in `/reports` (beyond `analytics_foundation.py` stub)
 - [ ] **Paid Subscription Checkout & Billing Webhooks:** Payment gateway integration (Razorpay/Stripe) for upgrading from `Free` to `Growth` / `Pro` tiers
 - [ ] **Regional Language Packs (Phase 2):** Full prompt/UI/TTS support for Marathi, Gujarati, Tamil, Telugu, and Bengali alongside Hinglish/Hindi/English
-- [ ] **WhatsApp Udhaar Reminders & Thermal/PDF Receipt Export:** One-tap WhatsApp payment reminder links and printable/PDF thermal bills
-- [ ] **Direct Variant-Swap Reversal Shortcut:** Voice shortcut like `"Maggi 70g nahi 250g wali thi"` auto-reversing the prior sale and re-recording on the new SKU in one turn (currently safely guides owner to tap Reverse & re-speak)
+- [ ] **WhatsApp Udhaar Reminders:** One-tap WhatsApp payment reminder links for overdue Khata balances

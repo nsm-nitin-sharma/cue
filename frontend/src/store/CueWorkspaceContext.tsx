@@ -21,6 +21,7 @@ import {
   deleteAccountRemote,
   fetchWorkspaceBootstrap,
   recordCustomerPaymentRemote,
+  recordSupplierPaymentRemote,
   reverseOperationRemote,
   sendTextCommandRemote,
   sendVoiceAudioTurn,
@@ -98,6 +99,7 @@ interface CueWorkspaceContextValue {
   products: Product[];
   movements: InventoryMovement[];
   customers: Customer[];
+  suppliers: Customer[];
   sales: Sale[];
   expenses: Expense[];
   customerPayments: CustomerPayment[];
@@ -134,6 +136,7 @@ interface CueWorkspaceContextValue {
   updateExpense: (expenseId: string, patch: Partial<Omit<Expense, "id" | "operationId" | "createdAt" | "status">>) => Promise<void>;
   updateCustomer: (customerId: string, patch: Partial<Pick<Customer, "name" | "phone" | "areaNote">>) => Promise<void>;
   recordManualCustomerPayment: (customerId: string, amount: number, method: "cash" | "upi" | "bank") => void;
+  recordManualSupplierPayment: (supplierId: string, amount: number, method: "cash" | "upi" | "bank") => void;
   todayStats: {
     salesTotal: number;
     cashTotal: number;
@@ -141,6 +144,7 @@ interface CueWorkspaceContextValue {
     expensesTotal: number;
     movementsCount: number;
     outstandingTotal: number;
+    supplierPayableTotal: number;
     lowStockProducts: Product[];
   };
 }
@@ -373,6 +377,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
 
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [suppliers, setSuppliers] = useState<Customer[]>([]);
   const [movements, setMovements] = useState<InventoryMovement[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -489,15 +494,26 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         })
       );
       const rawCusts = (boot.customers as Record<string, unknown>[]) ?? [];
-      setCustomers(
-        rawCusts.map((c) => ({
+      const mappedCusts: Customer[] = [];
+      const mappedSups: Customer[] = [];
+      for (const c of rawCusts) {
+        const rawNote = String(c.area_note ?? "");
+        const isSup = rawNote.toUpperCase().includes("[SUPPLIER]");
+        const item: Customer = {
           id: String(c.id),
           name: String(c.name),
           phone: String(c.phone ?? ""),
-          areaNote: String(c.area_note ?? ""),
+          areaNote: isSup ? rawNote.replace(/\[SUPPLIER\]/gi, "").trim() : rawNote,
           outstandingBalance: Number(c.outstanding_balance ?? 0),
-        }))
-      );
+        };
+        if (isSup) {
+          mappedSups.push(item);
+        } else {
+          mappedCusts.push(item);
+        }
+      }
+      setCustomers(mappedCusts);
+      setSuppliers(mappedSups);
       const rawMovs = (boot.movements as Record<string, unknown>[]) ?? [];
       setMovements(
         rawMovs.map((m) => {
@@ -2824,6 +2840,72 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
     [appendEntriesToDate, customers, isLiveBackend, isOffline, language, refreshLiveWorkspace, todayYmd]
   );
 
+  const recordManualSupplierPayment = useCallback(
+    (supplierId: string, amount: number, method: "cash" | "upi" | "bank") => {
+      const methodLabel = method === "upi" ? "Online" : method === "bank" ? "Bank" : "Cash";
+      if (isLiveBackend && !isOffline) {
+        recordSupplierPaymentRemote({
+          customer_id: supplierId,
+          amount,
+          payment_method: method,
+        })
+          .then(async () => {
+            const sup = suppliers.find((s) => s.id === supplierId);
+            if (sup) {
+              appendEntriesToDate(todayYmd, [
+                {
+                  id: `spay-${Date.now()}`,
+                  role: "assistant",
+                  content: `Supplier ${sup.name} ko ${formatINR(amount)} (${methodLabel}) pay kar diya gaya.`,
+                  timestamp: formatTimeIST(new Date().toISOString()),
+                  language,
+                },
+              ]);
+            }
+            await refreshLiveWorkspace();
+          })
+          .catch(() => {
+            setVoicePhase("error");
+            setStatusMessage("Supplier Payment Sync Failed");
+          });
+        return;
+      }
+      const opId = makeOperationId();
+      const sup = suppliers.find((s) => s.id === supplierId);
+      setSuppliers((prev) =>
+        prev.map((s) =>
+          s.id === supplierId ? { ...s, outstandingBalance: Math.max(0, s.outstandingBalance - amount) } : s
+        )
+      );
+      setExpenses((prev) => [
+        {
+          id: `exp-${opId}`,
+          category: "Supplier Payment",
+          description: `Paid supplier ${sup?.name ?? "Supplier"}`,
+          amount,
+          paymentMethod: method,
+          transactionDate: todayYmd,
+          status: "active",
+          operationId: opId,
+          createdAt: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
+      if (sup) {
+        appendEntriesToDate(todayYmd, [
+          {
+            id: `spay-${Date.now()}`,
+            role: "assistant",
+            content: `Supplier ${sup.name} ko ${formatINR(amount)} (${methodLabel}) pay kar diya gaya.`,
+            timestamp: formatTimeIST(new Date().toISOString()),
+            language,
+          },
+        ]);
+      }
+    },
+    [appendEntriesToDate, isLiveBackend, isOffline, language, refreshLiveWorkspace, suppliers, todayYmd]
+  );
+
   const todayStats = useMemo(() => {
     const todaysSales = sales.filter((s) => s.transactionDate === todayYmd && s.status === "active");
     const priorUdhaarCollectedToday = customerPayments
@@ -2840,6 +2922,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
       .reduce((a, e) => a + e.amount, 0);
     const movementsCount = movements.filter((m) => m.transactionDate === todayYmd).length;
     const outstandingTotal = customers.reduce((a, c) => a + c.outstandingBalance, 0);
+    const supplierPayableTotal = suppliers.reduce((a, s) => a + s.outstandingBalance, 0);
     const lowStockProducts = products.filter((p) => p.stock <= p.lowStockThreshold);
 
     return {
@@ -2849,9 +2932,10 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
       expensesTotal,
       movementsCount,
       outstandingTotal,
+      supplierPayableTotal,
       lowStockProducts,
     };
-  }, [customerPayments, customers, expenses, movements, products, sales, todayYmd]);
+  }, [customerPayments, customers, expenses, movements, products, sales, suppliers, todayYmd]);
 
   const submitAudioTurn = useCallback(
     async (audioBlob: Blob, fallbackTranscript?: string) => {
@@ -2915,6 +2999,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         products,
         movements,
         customers,
+        suppliers,
         sales,
         expenses,
         customerPayments,
@@ -2951,6 +3036,7 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
         updateExpense,
         updateCustomer,
         recordManualCustomerPayment,
+        recordManualSupplierPayment,
         todayStats,
       }}
     >

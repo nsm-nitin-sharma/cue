@@ -1,6 +1,16 @@
 from typing import Any
-from app.core.time_utils import get_business_today
+from app.core.time_utils import get_business_today, resolve_date_range
 from app.services.entity_resolver import resolve_product
+
+
+def _is_supplier_row(row: dict[str, Any]) -> bool:
+    return str(row.get("area_note") or "").startswith("[SUPPLIER]")
+
+
+def _apply_date_filter(q: Any, start_str: str, end_str: str) -> Any:
+    if start_str == end_str:
+        return q.eq("transaction_date", start_str)
+    return q.gte("transaction_date", start_str).lte("transaction_date", end_str)
 
 
 class QueryEngine:
@@ -19,8 +29,17 @@ class QueryEngine:
         products: list[dict[str, Any]] | None = None,
         aliases: list[dict[str, Any]] | None = None,
         timezone_name: str = "Asia/Kolkata",
+        relative_date: str | None = None,
+        date_range: str | None = None,
     ) -> dict[str, Any]:
         today_str = get_business_today(timezone_name).isoformat()
+        start_d, end_d, range_label = resolve_date_range(
+            date_range=date_range, relative_date=relative_date, timezone_name=timezone_name
+        )
+        start_str = start_d.isoformat()
+        end_str = end_d.isoformat()
+        is_today_only = start_str == today_str and end_str == today_str
+        range_tag = "Aaj abhi tak" if is_today_only else range_label
 
         if topic == "stock_check":
             prods = products or []
@@ -83,7 +102,7 @@ class QueryEngine:
                 "amount_inr": None,
             }
 
-        if topic in {"pending_payments", "customer_balance"}:
+        if topic in {"pending_payments", "customer_balance", "supplier_balance"}:
             cust_res = (
                 self.db.table("customers")
                 .select("id, name, outstanding_balance, area_note")
@@ -92,24 +111,49 @@ class QueryEngine:
                 .order("outstanding_balance", desc=True)
                 .execute()
             )
-            all_custs = cust_res.data or []
+            raw_rows = cust_res.data or []
+            want_suppliers = topic == "supplier_balance"
+            all_custs = [r for r in raw_rows if _is_supplier_row(r) == want_suppliers]
+
             if customer_query:
                 q = customer_query.lower()
                 matched = [c for c in all_custs if q in c["name"].lower()]
                 if matched:
                     summary = ", ".join(f"{c['name']}: ₹{float(c['outstanding_balance']):,.0f}" for c in matched)
+                    prefix = "Supplier Payable" if want_suppliers else "Khata balance"
                     return {
-                        "reply": f"Khata balance — {summary}.",
-                        "lines": [{"label": c["name"], "value": f"₹{float(c['outstanding_balance']):,.0f}", "tone": "ochre" if float(c["outstanding_balance"]) > 0 else "sage"} for c in matched],
+                        "reply": f"{prefix} — {summary}.",
+                        "lines": [
+                            {
+                                "label": c["name"],
+                                "value": f"₹{float(c['outstanding_balance']):,.0f}",
+                                "tone": ("crimson" if want_suppliers else "ochre")
+                                if float(c["outstanding_balance"]) > 0
+                                else "sage",
+                            }
+                            for c in matched
+                        ],
                         "amount_inr": sum(float(c["outstanding_balance"]) for c in matched),
                     }
-                return {"reply": f"Khata mein '{customer_query}' naam ka customer nahi mila.", "lines": [], "amount_inr": 0}
+                not_found_who = "Supplier" if want_suppliers else "Khata"
+                return {"reply": f"{not_found_who} mein '{customer_query}' naam ka koi record nahi mila.", "lines": [], "amount_inr": 0}
 
             pending = [c for c in all_custs if float(c["outstanding_balance"]) > 0]
             total_due = sum(float(c["outstanding_balance"]) for c in pending)
             if not pending:
-                return {"reply": "Abhi kisi bhi customer ka payment pending nahi hai.", "lines": [], "amount_inr": 0}
+                empty_msg = (
+                    "Abhi kisi bhi supplier ko payment dena baki nahi hai."
+                    if want_suppliers
+                    else "Abhi kisi bhi customer ka payment pending nahi hai."
+                )
+                return {"reply": empty_msg, "lines": [], "amount_inr": 0}
             details = ", ".join(f"{c['name']} (₹{float(c['outstanding_balance']):,.0f})" for c in pending[:5])
+            if want_suppliers:
+                return {
+                    "reply": f"{len(pending)} suppliers ko total ₹{total_due:,.0f} dena baki hai: {details}.",
+                    "lines": [{"label": c["name"], "value": f"₹{float(c['outstanding_balance']):,.0f}", "tone": "crimson"} for c in pending[:6]],
+                    "amount_inr": total_due,
+                }
             return {
                 "reply": f"{len(pending)} customers ka total ₹{total_due:,.0f} payment pending hai: {details}.",
                 "lines": [{"label": c["name"], "value": f"₹{float(c['outstanding_balance']):,.0f}", "tone": "ochre"} for c in pending[:6]],
@@ -117,24 +161,23 @@ class QueryEngine:
             }
 
         if topic == "expenses_summary":
-            exp_res = (
+            exp_q = (
                 self.db.table("expenses")
                 .select("category, description, amount, payment_method, status")
                 .eq("business_id", business_id)
-                .eq("transaction_date", today_str)
                 .eq("status", "active")
-                .execute()
             )
+            exp_res = _apply_date_filter(exp_q, start_str, end_str).execute()
             exps = exp_res.data or []
             if not exps:
                 return {
-                    "reply": "Aaj abhi tak koi expense record nahi hua hai.",
+                    "reply": f"{range_tag} koi expense record nahi hua hai.",
                     "lines": [{"label": "Total Expenses", "value": "₹0", "tone": "sage"}],
                     "amount_inr": 0.0,
                 }
             exp_total = sum(float(e["amount"]) for e in exps)
             return {
-                "reply": f"Aaj abhi tak {len(exps)} expenses hue hain, total ₹{exp_total:,.0f}.",
+                "reply": f"{range_tag} {len(exps)} expenses hue hain, total ₹{exp_total:,.0f}.",
                 "lines": [
                     {
                         "label": str(e.get("description") or e.get("category") or "Expense"),
@@ -147,7 +190,7 @@ class QueryEngine:
             }
 
         def _prior_udhaar_collected_today() -> float:
-            if not self.db:
+            if not self.db or not is_today_only:
                 return 0.0
             pay_res = (
                 self.db.table("customer_payments")
@@ -168,22 +211,20 @@ class QueryEngine:
             return extra
 
         if topic == "daily_summary":
-            sales_res = (
+            sales_q = (
                 self.db.table("sales")
                 .select("total_amount, paid_amount, status")
                 .eq("business_id", business_id)
-                .eq("transaction_date", today_str)
                 .eq("status", "active")
-                .execute()
             )
-            exp_res = (
+            sales_res = _apply_date_filter(sales_q, start_str, end_str).execute()
+            exp_q = (
                 self.db.table("expenses")
                 .select("amount, status")
                 .eq("business_id", business_id)
-                .eq("transaction_date", today_str)
                 .eq("status", "active")
-                .execute()
             )
+            exp_res = _apply_date_filter(exp_q, start_str, end_str).execute()
             s_rows = sales_res.data or []
             e_rows = exp_res.data or []
             prior_collected = _prior_udhaar_collected_today()
@@ -191,7 +232,7 @@ class QueryEngine:
             e_tot = sum(float(r["amount"]) for r in e_rows)
             net = s_tot - e_tot
             return {
-                "reply": f"Aaj ka hisaab: {len(s_rows)} sales (₹{s_tot:,.0f}), {len(e_rows)} expenses (₹{e_tot:,.0f}), net balance ₹{net:,.0f}.",
+                "reply": f"{range_label} ka hisaab: {len(s_rows)} sales (₹{s_tot:,.0f}), {len(e_rows)} expenses (₹{e_tot:,.0f}), net balance ₹{net:,.0f}.",
                 "lines": [
                     {"label": "Sales & Udhaar Collection", "value": f"₹{s_tot:,.0f}", "tone": "sage"},
                     {"label": "Expenses", "value": f"₹{e_tot:,.0f}", "tone": "crimson"},
@@ -200,7 +241,7 @@ class QueryEngine:
                 "amount_inr": net,
             }
 
-        # Default: today's sales summary (overall OR item-specific when product_query is provided)
+        # Default: sales summary over period (overall OR item-specific when product_query is provided)
         if product_query:
             prods = products or []
             als = aliases or []
@@ -226,14 +267,13 @@ class QueryEngine:
                 }
 
             matched_ids = {str(p["id"]) for p in matched_prods}
-            sales_res = (
+            sales_q = (
                 self.db.table("sales")
                 .select("id, total_amount, paid_amount, payment_status, status, sale_items(product_id, quantity, unit, line_total)")
                 .eq("business_id", business_id)
-                .eq("transaction_date", today_str)
                 .eq("status", "active")
-                .execute()
             )
+            sales_res = _apply_date_filter(sales_q, start_str, end_str).execute()
             qty_by_id: dict[str, float] = {str(p["id"]): 0.0 for p in matched_prods}
             rev_by_id: dict[str, float] = {str(p["id"]): 0.0 for p in matched_prods}
             for s in sales_res.data or []:
@@ -248,7 +288,7 @@ class QueryEngine:
             if total_qty <= 0:
                 label = matched_prods[0]["name"] if len(matched_prods) == 1 else product_query
                 return {
-                    "reply": f"Aaj abhi tak {label} ki koi sale nahi hui hai.",
+                    "reply": f"{range_tag} {label} ki koi sale nahi hui hai.",
                     "lines": [{"label": p["name"], "value": f"0 {p.get('base_unit', 'piece')} (₹0)", "tone": "neutral"} for p in matched_prods],
                     "amount_inr": 0.0,
                 }
@@ -263,19 +303,18 @@ class QueryEngine:
             ]
             label = matched_prods[0]["name"] if len(matched_prods) == 1 else product_query
             return {
-                "reply": f"Aaj abhi tak {label} ki total {total_qty:g} units (₹{total_rev:,.0f}) ki sale hui hai.",
+                "reply": f"{range_tag} {label} ki total {total_qty:g} units (₹{total_rev:,.0f}) ki sale hui hai.",
                 "lines": lines,
                 "amount_inr": total_rev,
             }
 
-        sales_res = (
+        sales_q = (
             self.db.table("sales")
             .select("total_amount, paid_amount, payment_status, status")
             .eq("business_id", business_id)
-            .eq("transaction_date", today_str)
             .eq("status", "active")
-            .execute()
         )
+        sales_res = _apply_date_filter(sales_q, start_str, end_str).execute()
         rows = sales_res.data or []
         prior_collected = _prior_udhaar_collected_today()
         billed_today = sum(float(r["total_amount"]) for r in rows)
@@ -291,7 +330,7 @@ class QueryEngine:
         if prior_collected > 0:
             lines.append({"label": "Prior Udhaar Collected Today", "value": f"₹{prior_collected:,.0f}", "tone": "sage"})
         return {
-            "reply": f"Aaj abhi tak {len(rows)} sales hui hain, total ₹{total:,.0f} (Collected ₹{cash:,.0f}, Udhaar ₹{credit:,.0f}).",
+            "reply": f"{range_tag} {len(rows)} sales hui hain, total ₹{total:,.0f} (Collected ₹{cash:,.0f}, Udhaar ₹{credit:,.0f}).",
             "lines": lines,
             "amount_inr": total,
         }

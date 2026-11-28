@@ -15,6 +15,9 @@ IntentType = Literal[
     "record_expense",
     "record_customer_payment",
     "record_udhaar_credit",
+    "customer_return",
+    "record_supplier_credit",
+    "record_supplier_payment",
     "create_customer",
     "update_customer",
     "update_product_settings",
@@ -36,6 +39,7 @@ class VoiceOperationItem(StrictModel):
     intent: IntentType
     product_query: str | None = Field(default=None, max_length=120)
     customer_query: str | None = Field(default=None, max_length=120)
+    new_name: str | None = Field(default=None, max_length=120)
     quantity: float | None = Field(default=None, gt=0, le=10000)
     unit: str | None = Field(default=None, max_length=32)
     unit_price: float | None = Field(default=None, ge=0, le=1000000)
@@ -51,7 +55,20 @@ class VoiceOperationItem(StrictModel):
     area_note: str | None = Field(default=None, max_length=120)
     low_stock_threshold: float | None = Field(default=None, ge=0, le=10000)
     relative_date: str | None = Field(default=None, max_length=48)
+    date_range: Literal[
+        "today",
+        "yesterday",
+        "day_before",
+        "this_week",
+        "last_week",
+        "last_7_days",
+        "this_month",
+        "last_month",
+        "last_30_days",
+    ] | None = None
     uses_prior_context: bool = False
+    is_combined_bill: bool = False
+    bill_total_amount: float | None = Field(default=None, ge=0, le=1000000)
     is_affirmative: bool | None = None
     is_negative: bool | None = None
     confidence: float = Field(default=0.95, ge=0.0, le=1.0)
@@ -63,12 +80,13 @@ class VoiceOperationItem(StrictModel):
         "daily_summary",
         "pending_payments",
         "customer_balance",
+        "supplier_balance",
         "stock_check",
         "general",
     ] | None = None
     notes: str | None = Field(default=None, max_length=240)
 
-    @field_validator("product_query", "customer_query", "description")
+    @field_validator("product_query", "customer_query", "new_name", "description")
     @classmethod
     def no_sql_injection_chars(cls, v: str | None) -> str | None:
         if v is not None and (";" in v or "--" in v):
