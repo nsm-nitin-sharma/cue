@@ -8,6 +8,7 @@ from app.core.logging import get_logger
 from app.domain.indian_numbers import extract_post_negation_number, parse_indian_number
 from app.domain.schemas.intents import IntentProposal, VoiceOperationItem
 from app.providers.llm.base import LLMProvider
+from app.services.entity_resolver import extract_product_price_hint
 
 logger = get_logger("cue.llm.gemini")
 
@@ -20,7 +21,8 @@ SECURITY & PRECISION RULES:
    - HOWEVER, if background chatter introduces conflicting numbers, competing items, or ANY slightest doubt/confusion about what the owner meant, set `"has_ambiguity_or_noise_conflict": true`, `"confidence": 0.5`, and write a clear, short `"clarification_question"` STRICTLY in `language_hint` (`"en"` -> English only, `"hi"` -> Devanagari Hindi only, `"hinglish"` -> Romanized Hinglish only). NEVER guess or assume!
 4. FREE-FORM AGENTIC PHRASING:
    - Understand ANY natural expression of intent ("20 Maggi sold", "bees maggi nikal gayi", "customer 20 maggi le gaya", "Inventory mein kitni Maggi padi hai?", "Ramesh ke khate mein 500 likh do", "Ramesh ne 500 de diye", "Naya customer Rahul add karo").
-   - PRODUCT QUERY PRESERVATION (CRITICAL): NEVER narrow or append a size/variant from `catalog_candidates` or `active_context` into `product_query` if the user did NOT speak that size/variant! Copy the product name ONLY as spoken (e.g. if user says "One Maggi masala sold" or "Coke bik gayi", output `product_query: "Maggi masala"` or `"Coke"`, NEVER `"Maggi Masala 70g"` unless the user actually spoke `"70g"` / `"70 gram"`!). Also do NOT set `has_ambiguity_or_noise_conflict: true` just because multiple variants exist in `catalog_candidates` — output `confidence: 0.95` and `has_ambiguity_or_noise_conflict: false` so the backend renders the clickable product chips.
+   - PRODUCT QUERY PRESERVATION (CRITICAL): NEVER narrow or append a size/variant/flavor from `catalog_candidates` or `active_context` into `product_query` if the user did NOT speak that size/variant/flavor! Copy the product name ONLY as spoken (e.g. if user says "One Maggi masala sold" or "Coke bik gayi", output `product_query: "Maggi masala"` or `"Coke"`, NEVER `"Maggi Masala 70g"` unless the user actually spoke `"70g"` / `"70 gram"`!). Also do NOT set `has_ambiguity_or_noise_conflict: true` just because multiple variants exist in `catalog_candidates` — output `confidence: 0.95` and `has_ambiguity_or_noise_conflict: false` so the backend renders the clickable product chips.
+   - PRICE-BASED VARIANT SELECTION (`price_hint`): If the user identifies a product variant by its MRP/price (e.g. "maggie 10 rupe vali", "10 wali maggi", "₹12 wali coke", "das rupaye wali maggi", "10 rs packet"), extract `product_query: "maggie"` and set `price_hint: 10`. Do NOT copy the MRP selector into `unit_price` unless a separate transaction/discount/cost rate (e.g., "8 rupaye mein") was spoken, and NEVER guess between multiple catalog items that share the same price (keep `product_query` as spoken so backend asks confirmation!).
    - For Inventory CRUD: use `inventory_receive`, `inventory_damage`, `inventory_expiry`, `inventory_adjust`, `update_product_settings` (price/threshold OR renaming a product via `new_name`), `archive_product`, or `query_business` (`query_topic: "stock_check"`).
    - For Khata (Customer Credit) CRUD: use `create_customer`, `update_customer` (rename via `new_name`, update `phone` or `area_note`), `record_udhaar_credit` (direct credit without product), `record_customer_payment`, or `query_business` (`query_topic: "pending_payments"` or `"customer_balance"`).
    - For Supplier Wholesale Khata (Accounts Payable):
@@ -71,6 +73,7 @@ SECURITY & PRECISION RULES:
       "customer_query": string | null,
       "quantity": number | null,
       "unit": string | null,
+      "price_hint": number | null,
       "unit_price": number | null,
       "cost_price": number | null,
       "selling_price": number | null,
@@ -350,14 +353,16 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
     clauses = [c.strip() for c in re.split(r"(?:,|\baur\b|\band\b)", utterance, flags=re.IGNORECASE) if c.strip()]
     ops: list[VoiceOperationItem] = []
     for clause in clauses[:25]:
-        c_low = clause.lower()
-        qty = parse_indian_number(clause)
+        c_no_price, c_price_hint = extract_product_price_hint(clause)
+        c_low = (c_no_price or clause).lower()
+        qty = parse_indian_number(c_no_price or clause)
         rel_date = "kal" if "kal" in c_low or "yesterday" in c_low else ("parso" if "parso" in c_low else None)
         if re.search(r"(damaged|kharab|toot)", c_low):
             ops.append(
                 VoiceOperationItem(
                     intent="inventory_damage",
                     quantity=qty,
+                    price_hint=c_price_hint,
                     uses_prior_context=bool(re.search(r"(unmein|usme|inmein|isme)", c_low)),
                     relative_date=rel_date,
                 )
@@ -368,6 +373,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
                     intent="inventory_expiry",
                     product_query="pepsi" if "pepsi" in c_low else None,
                     quantity=qty,
+                    price_hint=c_price_hint,
                     uses_prior_context=True,
                     relative_date=rel_date,
                 )
@@ -375,7 +381,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
         elif re.search(r"(aayi|aaya|receive|stock add|kharid)", c_low):
             prod = re.sub(r"\b(\d+|kal|aaj|supplier|se|ki|ke|ka|bottles?|packets?|jars?|mein|aur|add|ho|gaye|gayi|aayi|aaya|hain|hai|zyada|aa)\b", " ", c_low)
             prod = re.sub(r"\s+", " ", prod).strip() or None
-            ops.append(VoiceOperationItem(intent="inventory_receive", product_query=prod, quantity=qty, relative_date=rel_date))
+            ops.append(VoiceOperationItem(intent="inventory_receive", product_query=prod, quantity=qty, price_hint=c_price_hint, relative_date=rel_date))
         elif re.search(r"(bik|bech|sale|udhaar|credit)", c_low):
             prod = re.sub(r"\b(\d+|kal|aaj|bik|biki|gyi|gayi|gaye|beche|bechi|udhaar|cash|mein|hai|hain|ke|ki|ka)\b", " ", c_low)
             prod = re.sub(r"\s+", " ", prod).strip() or None
@@ -384,6 +390,7 @@ def deterministic_fallback_parse(utterance: str, language_hint: str) -> IntentPr
                     intent="record_sale",
                     product_query=prod,
                     quantity=qty,
+                    price_hint=c_price_hint,
                     payment_status="credit" if ("udhaar" in c_low or "credit" in c_low) else "paid",
                     relative_date=rel_date,
                 )

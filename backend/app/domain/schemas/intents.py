@@ -42,6 +42,7 @@ class VoiceOperationItem(StrictModel):
     new_name: str | None = Field(default=None, max_length=120)
     quantity: float | None = Field(default=None, gt=0, le=10000)
     unit: str | None = Field(default=None, max_length=32)
+    price_hint: float | None = Field(default=None, ge=0, le=1000000)
     unit_price: float | None = Field(default=None, ge=0, le=1000000)
     cost_price: float | None = Field(default=None, ge=0, le=1000000)
     selling_price: float | None = Field(default=None, ge=0, le=1000000)

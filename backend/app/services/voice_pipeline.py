@@ -31,6 +31,9 @@ from app.providers.llm.factory import get_llm_provider
 from app.providers.llm.gemini import deterministic_fallback_parse
 from app.providers.stt.factory import get_stt_provider
 from app.services.entity_resolver import (
+    extract_clause_price_hint,
+    extract_product_price_hint,
+    filter_candidates_by_price,
     resolve_customer,
     resolve_product,
     resolve_product_guarded,
@@ -326,7 +329,15 @@ class VoicePipelineService:
             target_date=target_hint_date,
             timezone_name=tz_name,
         )
-        catalog_hints = [{"name": p["name"], "unit": p["base_unit"], "stock": p["current_stock"]} for p in products]
+        catalog_hints = [
+            {
+                "name": p["name"],
+                "unit": p["base_unit"],
+                "price": float(p.get("default_selling_price") or 0),
+                "stock": p["current_stock"],
+            }
+            for p in products
+        ]
         customer_hints = [
             {
                 "name": c["name"],
@@ -407,7 +418,13 @@ class VoicePipelineService:
                 "update_product_settings",
                 "archive_product",
             }:
-                pres_check = resolve_product_guarded(candidate_ops[0].product_query, clean_text, products, aliases)
+                pres_check = resolve_product_guarded(
+                    candidate_ops[0].product_query,
+                    clean_text,
+                    products,
+                    aliases,
+                    price_hint=candidate_ops[0].price_hint,
+                )
                 if pres_check.status in {"ambiguous", "verify_alias", "not_found"}:
                     proposal.operations = candidate_ops
                     bypass_to_batch = True
@@ -671,6 +688,43 @@ class VoicePipelineService:
                     customers=customers,
                     context_state=context_state,
                 )
+            _, r_price = extract_product_price_hint(reply_text)
+            if r_price is None and re.fullmatch(r"\s*\d+(?:\.\d+)?\s*", reply_text.strip()):
+                cand_p = float(reply_text.strip())
+                if filter_candidates_by_price(cands, cand_p):
+                    r_price = cand_p
+            if r_price is not None:
+                priced_cands = filter_candidates_by_price(cands, r_price)
+                if len(priced_cands) > 1:
+                    context_state["pending_flow"] = {
+                        "type": "disambiguate_product",
+                        "candidate_ids": [str(c["id"]) for c in priced_cands],
+                        "draft": pending_flow["draft"],
+                    }
+                    names = " ya ".join(c["name"] for c in priced_cands)
+                    msg = f"₹{r_price:g} mein {len(priced_cands)} options mile: {names}. Confirm karein kaunsa wala?"
+                    res = VoiceTurnResult(
+                        operation_id=operation_id,
+                        status="needs_clarification",
+                        transcript=reply_text,
+                        reply=msg,
+                        language=language,  # type: ignore[arg-type]
+                        clarification={
+                            "kind": "disambiguate_product",
+                            "prompt": msg,
+                            "candidates": [
+                                {
+                                    "id": str(c["id"]),
+                                    "label": c["name"],
+                                    "meta": f"Stock: {c['current_stock']:g} · ₹{float(c['default_selling_price']):g}",
+                                    "value": c["name"],
+                                }
+                                for c in priced_cands
+                            ],
+                        },
+                    )
+                    self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, reply_text, language, stt_provider, stt_confidence, pending_flow, "needs_clarification", "tier2", [], res, context_state, user_id)
+                    return res
 
         if flow_type == "disambiguate_customer":
             cands = [c for c in customers if str(c["id"]) in pending_flow.get("candidate_ids", [])]
@@ -1726,6 +1780,7 @@ class VoicePipelineService:
             txn_date_str = txn_date.isoformat()
 
             if op.intent == "query_business":
+                q_price_hint = op.price_hint if op.price_hint is not None else extract_clause_price_hint(op.product_query, raw_transcript)
                 qres = self.queries.answer_query(
                     business_id=business_id,
                     topic=op.query_topic,
@@ -1736,6 +1791,7 @@ class VoicePipelineService:
                     timezone_name=tz_name,
                     relative_date=op.relative_date,
                     date_range=op.date_range,
+                    price_hint=q_price_hint,
                 )
                 replies.append(qres["reply"])
                 topic_titles = {
@@ -1838,15 +1894,15 @@ class VoicePipelineService:
                 resolved_corr_candidates: list[dict[str, Any]] = []
                 variant_cue = bool(
                     re.search(
-                        r"\b\d+\s*(?:g|gm|gms|grams?|ml|mls|kg|kilo|ltr|litres?|liters?)\b|wali\s+thi",
+                        r"\b\d+\s*(?:g|gm|gms|grams?|ml|mls|kg|kilo|ltr|litres?|liters?)\b|(?:wal[aei]|val[aei])\s+(?:thi|tha)\b|\b\d+(?:\.\d+)?\s*(?:rupaye|rupaiye|rupe|rs|₹)\s*(?:wal[aei]|val[aei])?",
                         raw_transcript,
                         re.IGNORECASE,
                     )
                 )
                 swap_query = op.product_query
-                if not swap_query and variant_cue and last_kind in swap_supported_kinds:
+                if not swap_query and (variant_cue or op.price_hint is not None) and last_kind in swap_supported_kinds:
                     neg_swap = re.search(
-                        r"(?:nahi|nahin|not|ki\s+jagah|instead\s+of)\s+([a-z0-9\s]+?)(?:\s+wali|\s+thi|\s+tha|[.,]|$)",
+                        r"(?:nahi|nahin|not|ki\s+jagah|instead\s+of)\s+([a-z0-9\s]+?)(?:\s+wali|\s+vali|\s+wala|\s+thi|\s+tha|[.,]|$)",
                         raw_transcript,
                         re.IGNORECASE,
                     )
@@ -1855,9 +1911,12 @@ class VoicePipelineService:
                         last_pname = str(context_state.get("last_product_name") or "").strip()
                         brand_prefix = last_pname.split()[0] if last_pname else ""
                         swap_query = f"{brand_prefix} {tail}".strip() if (brand_prefix and brand_prefix.lower() not in tail.lower()) else tail
+                    elif op.price_hint is not None:
+                        last_pname = str(context_state.get("last_product_name") or "").strip()
+                        swap_query = last_pname.split()[0] if last_pname else None
 
                 if swap_query:
-                    pres_corr = resolve_product_guarded(swap_query, raw_transcript, products, aliases)
+                    pres_corr = resolve_product_guarded(swap_query, raw_transcript, products, aliases, price_hint=op.price_hint)
                     resolved_corr_status = pres_corr.status
                     resolved_corr_candidates = pres_corr.candidates
                     if pres_corr.status in {"exact", "verify_alias"} and pres_corr.product:
@@ -2547,7 +2606,13 @@ class VoicePipelineService:
 
                     for j in sale_group_indices:
                         g_op = operations[j]
-                        pres_g = resolve_product_guarded(g_op.product_query, raw_transcript, products, aliases)
+                        pres_g = resolve_product_guarded(
+                            g_op.product_query,
+                            raw_transcript,
+                            products,
+                            aliases,
+                            price_hint=g_op.price_hint,
+                        )
                         if pres_g.status == "ambiguous" and pres_g.candidates:
                             names = " ya ".join(c["name"] for c in pres_g.candidates)
                             msg = f"'{g_op.product_query}' ke {len(pres_g.candidates)} options mile: {names}. Combined bill ke liye exact item select karein."
@@ -2836,7 +2901,13 @@ class VoicePipelineService:
                         (p for p in products if str(p["id"]) == str(context_state["last_product_id"])), None
                     )
                 else:
-                    pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
+                    pres = resolve_product_guarded(
+                        op.product_query,
+                        raw_transcript,
+                        products,
+                        aliases,
+                        price_hint=op.price_hint,
+                    )
                     inferred_pm = op.payment_method or (
                         "upi"
                         if re.search(
@@ -2928,10 +2999,20 @@ class VoicePipelineService:
                             if op.intent == "record_sale"
                             else ("receive" if op.intent == "inventory_receive" else op.intent.replace("inventory_", ""))
                         )
-                        msg = (
-                            f"'{op.product_query}' ke {len(pres.candidates)} options mile: {names} "
-                            f"({qty_disp} {action_disp}). Screen se select karein ya exact naam bolein."
-                        )
+                        cand_prices = {round(float(c.get("default_selling_price") or 0), 2) for c in pres.candidates}
+                        shared_price = next(iter(cand_prices)) if len(cand_prices) == 1 and next(iter(cand_prices)) > 0 else None
+                        if shared_price is not None and (
+                            op.price_hint is not None or extract_clause_price_hint(op.product_query, raw_transcript) is not None
+                        ):
+                            msg = (
+                                f"₹{shared_price:g} mein '{op.product_query}' ke {len(pres.candidates)} variants mile: {names} "
+                                f"({qty_disp} {action_disp}). Confirm karein kaunsa wala?"
+                            )
+                        else:
+                            msg = (
+                                f"'{op.product_query}' ke {len(pres.candidates)} options mile: {names} "
+                                f"({qty_disp} {action_disp}). Screen se select karein ya exact naam bolein."
+                            )
                         res = VoiceTurnResult(
                             operation_id=operation_id,
                             status="needs_clarification",
@@ -3365,7 +3446,13 @@ class VoicePipelineService:
                     )
                 ret_prod: dict[str, Any] | None = None
                 if op.product_query:
-                    pres_ret = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
+                    pres_ret = resolve_product_guarded(
+                        op.product_query,
+                        raw_transcript,
+                        products,
+                        aliases,
+                        price_hint=op.price_hint,
+                    )
                     if pres_ret.status == "ambiguous" and pres_ret.candidates:
                         names = " ya ".join(c["name"] for c in pres_ret.candidates)
                         msg = f"'{op.product_query}' ke {len(pres_ret.candidates)} options mile: {names}. Kaunsa product wapas aaya hai?"
@@ -4233,7 +4320,13 @@ class VoicePipelineService:
                         reply="Kis product ka price ya low-stock limit update karna hai?",
                         language=language,  # type: ignore[arg-type]
                     )
-                pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
+                pres = resolve_product_guarded(
+                    op.product_query,
+                    raw_transcript,
+                    products,
+                    aliases,
+                    price_hint=op.price_hint,
+                )
                 if pres.status == "ambiguous":
                     return VoiceTurnResult(
                         operation_id=operation_id,
@@ -4311,7 +4404,13 @@ class VoicePipelineService:
                         reply="Kis item ko catalog se archive karna hai?",
                         language=language,  # type: ignore[arg-type]
                     )
-                pres = resolve_product_guarded(op.product_query, raw_transcript, products, aliases)
+                pres = resolve_product_guarded(
+                    op.product_query,
+                    raw_transcript,
+                    products,
+                    aliases,
+                    price_hint=op.price_hint,
+                )
                 if pres.status == "ambiguous":
                     return VoiceTurnResult(
                         operation_id=operation_id,

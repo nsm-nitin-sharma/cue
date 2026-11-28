@@ -31,6 +31,7 @@ class QueryEngine:
         timezone_name: str = "Asia/Kolkata",
         relative_date: str | None = None,
         date_range: str | None = None,
+        price_hint: float | None = None,
     ) -> dict[str, Any]:
         today_str = get_business_today(timezone_name).isoformat()
         start_d, end_d, range_label = resolve_date_range(
@@ -45,7 +46,7 @@ class QueryEngine:
             prods = products or []
             als = aliases or []
             if product_query:
-                pres = resolve_product(product_query, prods, als)
+                pres = resolve_product(product_query, prods, als, price_hint=price_hint)
                 if pres.status in {"exact", "verify_alias"} and pres.product:
                     p = pres.product
                     qty = float(p.get("current_stock") or 0)
@@ -245,7 +246,7 @@ class QueryEngine:
         if product_query:
             prods = products or []
             als = aliases or []
-            pres = resolve_product(product_query, prods, als)
+            pres = resolve_product(product_query, prods, als, price_hint=price_hint)
             matched_prods: list[dict[str, Any]] = []
             if pres.status in {"exact", "verify_alias"} and pres.product:
                 matched_prods = [pres.product]

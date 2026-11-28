@@ -1622,3 +1622,186 @@ def test_supplier_credit_split_sale_and_voice_rename():
     cres_rahul = resolve_customer("Rahul", cust_only)
     assert cres_rahul.status == "exact" and cres_rahul.customer["id"] == "c-rahul"
     assert len(sup_only) == 1 and sup_only[0]["id"] == "s-rahul"
+
+
+def test_price_based_variant_resolution_and_same_price_confirmation():
+    from app.services.entity_resolver import (
+        extract_product_price_hint,
+        filter_candidates_by_price,
+        resolve_short_variant_reply,
+    )
+    from app.services.query_engine import QueryEngine
+
+    # 1. Price extractor handles Hindi/Hinglish/₹ variants while ignoring weights & custom sale prices
+    assert extract_product_price_hint("maggie 10 rupe vali") == ("maggie", 10.0)
+    assert extract_product_price_hint("10 wali maggi") == ("maggi", 10.0)
+    assert extract_product_price_hint("Maggi ₹12 wali") == ("Maggi", 12.0)
+    assert extract_product_price_hint("das rupaye wali maggi") == ("maggi", 10.0)
+    assert extract_product_price_hint("10 ka maggi") == ("maggi", 10.0)
+    assert extract_product_price_hint("Maggi 250 gram wali") == ("Maggi 250 gram wali", None)
+    assert extract_product_price_hint("2 Maggi 15 rupaye mein bechi") == ("2 Maggi 15 rupaye mein bechi", None)
+    assert extract_product_price_hint("20-20 Biscuits") == ("20-20 Biscuits", None)
+
+    # 2. Unique price variant auto-resolves immediately across multi-SKU catalog
+    maggi_unique = [
+        {"id": "m10", "name": "Maggi Masala 70 Gram", "base_unit": "piece", "current_stock": 20, "default_selling_price": 10.0},
+        {"id": "m33", "name": "Maggi Masala 250 Gram", "base_unit": "piece", "current_stock": 12, "default_selling_price": 33.0},
+        {"id": "m80", "name": "Maggi Masala 500 Gram", "base_unit": "piece", "current_stock": 8, "default_selling_price": 80.0},
+    ]
+    res10 = resolve_product("maggie 10 rupe vali", maggi_unique, [])
+    assert res10.status == "exact" and res10.product["id"] == "m10"
+
+    res33 = resolve_product_guarded("maggi", "2 maggi 33 rupaye wali bik gayi", maggi_unique, [])
+    assert res33.status == "exact" and res33.product["id"] == "m33"
+
+    # Unmatched price offers existing variants instead of silently picking wrong SKU
+    res_miss = resolve_product("maggie 15 rupe vali", maggi_unique, [])
+    assert res_miss.status == "not_found" and len(res_miss.candidates or []) == 3
+
+    # 3. Multiple variants with the SAME price MUST ask confirmation & narrow to ONLY that price!
+    maggi_same_price = [
+        {"id": "m_masala_10", "name": "Maggi Masala 70 Gram", "base_unit": "piece", "current_stock": 18, "default_selling_price": 10.0},
+        {"id": "m_atta_10", "name": "Maggi Atta 70 Gram", "base_unit": "piece", "current_stock": 9, "default_selling_price": 10.0},
+        {"id": "m_250_33", "name": "Maggi Masala 250 Gram", "base_unit": "piece", "current_stock": 7, "default_selling_price": 33.0},
+    ]
+    res_same = resolve_product("maggie 10 rupe vali", maggi_same_price, [])
+    assert res_same.status == "ambiguous"
+    assert {c["id"] for c in (res_same.candidates or [])} == {"m_masala_10", "m_atta_10"}
+
+    # Even if LLM over-normalized to "Maggi Masala" without user speaking "Masala", guard restores confirmation!
+    res_guarded_same = resolve_product_guarded("Maggi Masala", "maggie 10 rupe vali bik gayi", maggi_same_price, [], price_hint=10.0)
+    assert res_guarded_same.status == "ambiguous"
+    assert {c["id"] for c in (res_guarded_same.candidates or [])} == {"m_masala_10", "m_atta_10"}
+
+    # 4. Follow-up variant reply by price
+    assert resolve_short_variant_reply("33 wali", maggi_same_price)["id"] == "m_250_33"
+    assert resolve_short_variant_reply("10 rupaye wali", maggi_same_price) is None
+    assert len(filter_candidates_by_price(maggi_same_price, 10.0)) == 2
+
+    # 5. Fallback parser does not treat '10 rupe vali' as quantity
+    fb_no_qty = deterministic_fallback_parse("maggie 10 rupe vali bik gayi", "hinglish")
+    assert fb_no_qty.operations[0].intent == "record_sale"
+    assert fb_no_qty.operations[0].quantity is None
+    assert fb_no_qty.operations[0].price_hint == 10.0
+    assert fb_no_qty.operations[0].product_query == "maggie"
+
+    fb_with_qty = deterministic_fallback_parse("2 maggie 10 rupe vali bik gayi", "hinglish")
+    assert fb_with_qty.operations[0].quantity == 2.0
+    assert fb_with_qty.operations[0].price_hint == 10.0
+    assert fb_with_qty.operations[0].product_query == "maggie"
+
+    # 6. QueryEngine stock_check respects price_hint
+    qe = QueryEngine(db=object())
+    st_33 = qe.answer_query(
+        business_id="b1",
+        topic="stock_check",
+        product_query="maggi",
+        products=maggi_same_price,
+        aliases=[],
+        price_hint=33.0,
+    )
+    assert "Maggi Masala 250 Gram" in st_33["reply"] and "7 piece" in st_33["reply"]
+    st_10 = qe.answer_query(
+        business_id="b1",
+        topic="stock_check",
+        product_query="maggi",
+        products=maggi_same_price,
+        aliases=[],
+        price_hint=10.0,
+    )
+    assert "Maggi Masala 70 Gram" in st_10["reply"] and "Maggi Atta 70 Gram" in st_10["reply"]
+    assert "250 Gram" not in st_10["reply"]
+
+
+async def test_voice_pipeline_price_variant_and_same_price_disambiguation():
+    from app.services.voice_pipeline import VoicePipelineService
+
+    class _DummyDB:
+        pass
+
+    vp = VoicePipelineService(_DummyDB())
+    recorded: list[dict] = []
+    vp.tx.record_sale = lambda **kw: (
+        recorded.append(kw)
+        or {
+            "sale_id": f"sale-{len(recorded)}",
+            "before_qty": 10.0,
+            "after_qty": 9.0,
+            "total_amount": float(kw["unit_price"]) * float(kw["quantity"]),
+        }
+    )
+    vp._finalize_turn = lambda *a, **kw: None
+
+    catalog = [
+        {"id": "m_masala_10", "name": "Maggi Masala 70 Gram", "base_unit": "piece", "current_stock": 18.0, "default_selling_price": 10.0, "default_cost_price": 8.0},
+        {"id": "m_atta_10", "name": "Maggi Atta 70 Gram", "base_unit": "piece", "current_stock": 9.0, "default_selling_price": 10.0, "default_cost_price": 8.5},
+        {"id": "m_250_33", "name": "Maggi Masala 250 Gram", "base_unit": "piece", "current_stock": 7.0, "default_selling_price": 33.0, "default_cost_price": 28.0},
+    ]
+
+    # Case A: Unique price ("33 rupe vali") executes directly without asking confirmation
+    res_unique = await vp._execute_operations_batch(
+        operations=[VoiceOperationItem(intent="record_sale", product_query="maggie", price_hint=33.0, quantity=1, payment_method="cash", payment_status="paid")],
+        business_id="b1",
+        user_id="u1",
+        conv_id="conv-1",
+        today_str="2026-11-28",
+        tz_name="Asia/Kolkata",
+        operation_id="22222222-2222-2222-2222-222222222221",
+        payload_hash="hash-u",
+        raw_transcript="maggie 33 rupe vali bik gayi",
+        language="hinglish",
+        stt_provider="text",
+        stt_confidence=1.0,
+        products=catalog,
+        aliases=[],
+        customers=[],
+        context_state={},
+    )
+    assert res_unique.status == "executed"
+    assert recorded[-1]["product_id"] == "m_250_33"
+
+    # Case B: Multiple variants share ₹10 -> asks confirmation ONLY between those ₹10 variants, then completes on follow-up
+    ctx_same: dict = {}
+    res_same = await vp._execute_operations_batch(
+        operations=[VoiceOperationItem(intent="record_sale", product_query="maggie", price_hint=10.0, quantity=2, payment_method="cash", payment_status="paid")],
+        business_id="b1",
+        user_id="u1",
+        conv_id="conv-1",
+        today_str="2026-11-28",
+        tz_name="Asia/Kolkata",
+        operation_id="22222222-2222-2222-2222-222222222222",
+        payload_hash="hash-s1",
+        raw_transcript="2 maggie 10 rupe vali bik gayi",
+        language="hinglish",
+        stt_provider="text",
+        stt_confidence=1.0,
+        products=catalog,
+        aliases=[],
+        customers=[],
+        context_state=ctx_same,
+    )
+    assert res_same.status == "needs_clarification"
+    assert res_same.clarification["kind"] == "disambiguate_product"
+    assert {c["id"] for c in res_same.clarification["candidates"]} == {"m_masala_10", "m_atta_10"}
+    assert "₹10" in res_same.reply
+
+    res_done = await vp._handle_pending_flow(
+        pending_flow=ctx_same["pending_flow"],
+        reply_text="Maggi Atta 70 Gram",
+        business_id="b1",
+        user_id="u1",
+        conv_id="conv-1",
+        today_str="2026-11-28",
+        tz_name="Asia/Kolkata",
+        operation_id="22222222-2222-2222-2222-222222222223",
+        payload_hash="hash-s2",
+        language="hinglish",
+        stt_provider="text",
+        stt_confidence=1.0,
+        products=catalog,
+        customers=[],
+        context_state=ctx_same,
+    )
+    assert res_done is not None and res_done.status == "executed"
+    assert recorded[-1]["product_id"] == "m_atta_10"
+    assert recorded[-1]["quantity"] == 2.0
