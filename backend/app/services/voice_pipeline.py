@@ -992,11 +992,37 @@ class VoicePipelineService:
             return res
 
         if intent == "record_sale" and draft.get("customer_query") and not draft.get("customer_id"):
-            cres_d = resolve_customer(str(draft["customer_query"]), customers)
+            non_sup_draft, _ = self._split_customers_and_suppliers(customers)
+            cres_d = resolve_customer(str(draft["customer_query"]), non_sup_draft)
+            if cres_d.status == "ambiguous" and cres_d.candidates:
+                context_state["pending_flow"] = {
+                    "type": "disambiguate_customer",
+                    "candidate_ids": [str(c["id"]) for c in cres_d.candidates],
+                    "draft": draft,
+                }
+                names = " ya ".join(c["name"] for c in cres_d.candidates)
+                msg = f"Khata mein {len(cres_d.candidates)} {draft['customer_query']} hain ({names}). Kaunse customer ke liye?"
+                res = VoiceTurnResult(
+                    operation_id=operation_id,
+                    status="needs_clarification",
+                    transcript=raw_transcript,
+                    reply=msg,
+                    language=language,  # type: ignore[arg-type]
+                    clarification={
+                        "kind": "disambiguate_customer",
+                        "prompt": msg,
+                        "candidates": [
+                            {"id": str(c["id"]), "label": c["name"], "meta": f"Due ₹{float(c['outstanding_balance']):,.0f}", "value": c["name"]}
+                            for c in cres_d.candidates
+                        ],
+                    },
+                )
+                self._finalize_turn(conv_id, business_id, today_str, operation_id, payload_hash, raw_transcript, language, stt_provider, stt_confidence, draft, "needs_clarification", "tier2", [], res, context_state, user_id)
+                return res
             if cres_d.status == "exact" and cres_d.customer:
                 draft["customer_id"] = str(cres_d.customer["id"])
                 draft["customer_name"] = cres_d.customer["name"]
-            elif (draft.get("payment_status") == "credit") and cres_d.status == "not_found":
+            elif (draft.get("payment_status") in {"credit", "partial"}) and cres_d.status == "not_found":
                 new_cust = self.tx.create_customer(
                     business_id=business_id,
                     name=str(draft["customer_query"]).title(),

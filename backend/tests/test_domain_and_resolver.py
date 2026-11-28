@@ -1610,3 +1610,15 @@ def test_supplier_credit_split_sale_and_voice_rename():
     assert gita_sup["outstanding_balance"] == 0.0
     assert rahul_sup["outstanding_balance"] == 0.0
     assert other_sup["outstanding_balance"] == 1500.0
+
+    # 12. Customer Khata resolution skips [SUPPLIER] accounts sharing the same name (e.g. Customer Rahul vs Supplier Rahul)
+    from app.services.voice_pipeline import VoicePipelineService
+
+    mixed_accts = [
+        {"id": "c-rahul", "name": "Rahul", "area_note": "Noida", "outstanding_balance": 0.0},
+        {"id": "s-rahul", "name": "Rahul", "area_note": "[SUPPLIER]", "outstanding_balance": 2900.0},
+    ]
+    cust_only, sup_only = VoicePipelineService._split_customers_and_suppliers(mixed_accts)
+    cres_rahul = resolve_customer("Rahul", cust_only)
+    assert cres_rahul.status == "exact" and cres_rahul.customer["id"] == "c-rahul"
+    assert len(sup_only) == 1 and sup_only[0]["id"] == "s-rahul"
