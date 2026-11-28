@@ -7,6 +7,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { LivingAcousticOrb } from "@/features/voice/LivingAcousticOrb";
 import { ReceiptSlipCard } from "@/features/voice/ReceiptSlipCard";
 import { useCueWorkspace } from "@/store/CueWorkspaceContext";
+import { getTodayIST } from "@/lib/format";
 import { speakReply } from "@/lib/tts";
 
 export default function VoiceDeskPage() {
@@ -49,7 +50,7 @@ export default function VoiceDeskPage() {
     prevCountRef.current = count;
   }, [activeConversation.entries.length, activeDate]);
 
-  const todayDate = conversations[0]?.date;
+  const todayDate = getTodayIST();
   const entries = activeConversation.entries;
 
   return (

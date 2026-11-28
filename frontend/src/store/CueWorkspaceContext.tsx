@@ -604,33 +604,41 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
       const rawConvs = (boot.conversations as Record<string, unknown>[]) ?? [];
       const rawMsgs = (boot.messages as Record<string, unknown>[]) ?? [];
       if (rawConvs.length > 0) {
-        setConversations(
-          rawConvs.map((conv) => {
-            const cDate = String(conv.conversation_date);
-            const entries: ChatEntry[] = rawMsgs
-              .filter((m) => String(m.conversation_date) === cDate)
-              .map((m) => {
-                const ui = (m.ui_payload as VoiceTurnResult | null) ?? null;
-                return {
-                  id: String(m.id),
-                  role: (m.role as "user" | "assistant") ?? "assistant",
-                  content: String(m.content),
-                  timestamp: formatTimeIST(String(m.created_at)),
-                  language: (m.language as LanguageMode) ?? "hinglish",
-                  operationId: m.linked_operation_id ? String(m.linked_operation_id) : undefined,
-                  receipt: ui?.receipts?.[0],
-                  receipts: ui?.receipts,
-                  clarification: ui?.clarification ?? undefined,
-                };
-              });
-            return {
-              date: cDate,
-              label: formatDayBadge(cDate, todayYmd),
-              summary: String(conv.daily_summary ?? "Daily ledger chat"),
-              entries,
-            };
-          })
-        );
+        const mappedConvs = rawConvs.map((conv) => {
+          const cDate = String(conv.conversation_date);
+          const entries: ChatEntry[] = rawMsgs
+            .filter((m) => String(m.conversation_date) === cDate)
+            .map((m) => {
+              const ui = (m.ui_payload as VoiceTurnResult | null) ?? null;
+              return {
+                id: String(m.id),
+                role: (m.role as "user" | "assistant") ?? "assistant",
+                content: String(m.content),
+                timestamp: formatTimeIST(String(m.created_at)),
+                language: (m.language as LanguageMode) ?? "hinglish",
+                operationId: m.linked_operation_id ? String(m.linked_operation_id) : undefined,
+                receipt: ui?.receipts?.[0],
+                receipts: ui?.receipts,
+                clarification: ui?.clarification ?? undefined,
+              };
+            });
+          return {
+            date: cDate,
+            label: formatDayBadge(cDate, todayYmd),
+            summary: String(conv.daily_summary ?? "Daily ledger chat"),
+            entries,
+          };
+        });
+        if (!mappedConvs.some((c) => c.date === todayYmd)) {
+          mappedConvs.unshift({
+            date: todayYmd,
+            label: "Today",
+            summary: "Ready for voice or text commands",
+            entries: [],
+          });
+        }
+        mappedConvs.sort((a, b) => b.date.localeCompare(a.date));
+        setConversations(mappedConvs);
       } else {
         setConversations([
           {
