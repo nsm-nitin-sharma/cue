@@ -1403,6 +1403,21 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
             const msg = res.reversed
               ? `Operation reverse ho gaya (${res.summary}) aur immutable audit log mein mark kar diya gaya.`
               : `Operation reverse kar diya gaya.`;
+            setConversations((prev) =>
+              prev.map((c) => ({
+                ...c,
+                entries: c.entries.map((e) => ({
+                  ...e,
+                  receipt:
+                    e.receipt?.operationId === operationId
+                      ? { ...e.receipt, status: "undone", reversible: false }
+                      : e.receipt,
+                  receipts: e.receipts?.map((r) =>
+                    r.operationId === operationId ? { ...r, status: "undone", reversible: false } : r
+                  ),
+                })),
+              }))
+            );
             appendEntriesToDate(todayYmd, [
               {
                 id: `undo-${Date.now()}`,
@@ -1423,32 +1438,52 @@ export function CueWorkspaceProvider({ children }: { children: React.ReactNode }
           });
         return;
       }
-      const mov = movements.find((m) => m.operationId === operationId);
+      const matchingMovs = movements.filter(
+        (m) => m.operationId === operationId && m.movementType !== "reversal"
+      );
+      const linkedSale = sales.find((s) => s.operationId === operationId);
       const nowIso = new Date().toISOString();
-      if (mov) {
+      if (matchingMovs.length > 0) {
+        const deltaByProd = new Map<string, number>();
+        for (const m of matchingMovs) {
+          deltaByProd.set(m.productId, (deltaByProd.get(m.productId) ?? 0) + m.quantityDelta);
+        }
         setProducts((prev) =>
-          prev.map((p) =>
-            p.id === mov.productId ? { ...p, stock: Math.max(0, p.stock - mov.quantityDelta) } : p
-          )
+          prev.map((p) => {
+            const d = deltaByProd.get(p.id);
+            return d !== undefined ? { ...p, stock: Math.max(0, p.stock - d) } : p;
+          })
         );
         setMovements((prev) => [
-          {
-            id: `rev-${Date.now()}`,
+          ...matchingMovs.map((mov, idx) => ({
+            id: `rev-${Date.now()}-${idx}`,
             productId: mov.productId,
             productName: mov.productName,
-            movementType: "reversal",
+            movementType: "reversal" as const,
             quantityDelta: -mov.quantityDelta,
             unit: mov.unit,
+            referenceType: "reversal",
+            referenceId: mov.id,
             transactionDate: todayYmd,
             notes: `Reversal of ${operationId.slice(0, 6)}`,
             operationId: `rev-${operationId}`,
             createdAt: nowIso,
-          },
+          })),
           ...prev,
         ]);
+      } else if (linkedSale && linkedSale.items.length > 0) {
+        const restoreByProd = new Map<string, number>();
+        for (const it of linkedSale.items) {
+          restoreByProd.set(it.productId, (restoreByProd.get(it.productId) ?? 0) + it.quantity);
+        }
+        setProducts((prev) =>
+          prev.map((p) => {
+            const q = restoreByProd.get(p.id);
+            return q !== undefined ? { ...p, stock: p.stock + q } : p;
+          })
+        );
       }
 
-      const linkedSale = sales.find((s) => s.operationId === operationId);
       if (linkedSale) {
         setSales((prev) =>
           prev.map((s) => (s.operationId === operationId ? { ...s, status: "voided" } : s))

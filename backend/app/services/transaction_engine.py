@@ -1293,8 +1293,10 @@ class TransactionEngine:
         transaction_date: str,
     ) -> dict[str, Any]:
         reversed_parts: list[str] = []
+        reversed_ids = self._reversed_movement_ids(business_id)
+        restored_sale_product_ids: set[str] = set()
 
-        # 1. Reverse active sale (and unpaid Udhaar balance if credit)
+        # 1. Reverse active sale (restore exact active sale_items qty to inventory + adjust Udhaar balance)
         sales_rows = (
             self.db.table("sales")
             .select("*")
@@ -1326,6 +1328,84 @@ class TransactionEngine:
                     self.db.table("customers").update(
                         {"outstanding_balance": new_bal, "updated_at": "now()"}
                     ).eq("id", sale["customer_id"]).eq("business_id", business_id).execute()
+
+            # Restore inventory for every item on the active sale (handles both direct & payment/qty-corrected sales)
+            s_items = (
+                self.db.table("sale_items")
+                .select("*")
+                .eq("business_id", business_id)
+                .eq("sale_id", sale["id"])
+                .execute()
+                .data
+                or []
+            )
+            # Find any active unreversed sale movement linked via operation_id or parent_sale_id chain
+            orig_sale_mvs = (
+                self.db.table("inventory_movements")
+                .select("*")
+                .eq("business_id", business_id)
+                .eq("movement_type", "sale")
+                .eq("operation_id", operation_id)
+                .execute()
+                .data
+                or []
+            )
+            if not orig_sale_mvs and sale.get("parent_sale_id"):
+                orig_sale_mvs = (
+                    self.db.table("inventory_movements")
+                    .select("*")
+                    .eq("business_id", business_id)
+                    .eq("movement_type", "sale")
+                    .eq("reference_id", sale["parent_sale_id"])
+                    .execute()
+                    .data
+                    or []
+                )
+
+            for item in s_items:
+                pid = str(item["product_id"])
+                qty_to_restore = float(item["quantity"] or 0)
+                if qty_to_restore <= 0:
+                    continue
+                inv_rows = (
+                    self.db.table("inventory")
+                    .select("current_quantity")
+                    .eq("business_id", business_id)
+                    .eq("product_id", pid)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if inv_rows:
+                    curr_qty = float(inv_rows[0]["current_quantity"])
+                    self.db.table("inventory").update(
+                        {"current_quantity": curr_qty + qty_to_restore, "updated_at": "now()"}
+                    ).eq("business_id", business_id).eq("product_id", pid).execute()
+
+                matched_mv = next(
+                    (m for m in orig_sale_mvs if str(m["product_id"]) == pid and str(m["id"]) not in reversed_ids),
+                    None,
+                )
+                self.db.table("inventory_movements").insert(
+                    {
+                        "business_id": business_id,
+                        "product_id": pid,
+                        "movement_type": "reversal",
+                        "quantity_delta": qty_to_restore,
+                        "unit": item.get("unit") or "piece",
+                        "reference_type": "reversal",
+                        "reference_id": matched_mv["id"] if matched_mv else sale["id"],
+                        "operation_id": reversal_operation_id,
+                        "transaction_date": transaction_date,
+                        "notes": f"Reversal of {operation_id[:8]}",
+                        "created_by": user_id,
+                    }
+                ).execute()
+                if matched_mv:
+                    reversed_ids.add(str(matched_mv["id"]))
+                restored_sale_product_ids.add(pid)
+
             reversed_parts.append(f"Sale ₹{float(sale['total_amount']):,.0f}")
 
         # 2. Reverse active expense
@@ -1405,6 +1485,8 @@ class TransactionEngine:
             or []
         )
         for mv in mv_rows:
+            if str(mv["id"]) in reversed_ids or str(mv["product_id"]) in restored_sale_product_ids:
+                continue
             delta = float(mv["quantity_delta"])
             inv_rows = (
                 self.db.table("inventory")
@@ -1437,13 +1519,40 @@ class TransactionEngine:
                     "created_by": user_id,
                 }
             ).execute()
+            reversed_ids.add(str(mv["id"]))
             if not sales_rows:
                 reversed_parts.append(f"Stock {-delta:+g} {mv['unit']}")
 
-        # 4. Mark voice_transactions audit status
+        # 4. Mark voice_transactions & persisted receipt card status as undone
         self.db.table("voice_transactions").update({"validation_status": "undone"}).eq(
             "business_id", business_id
         ).eq("operation_id", operation_id).execute()
+        try:
+            msg_rows = (
+                self.db.table("conversation_messages")
+                .select("id, ui_payload")
+                .eq("business_id", business_id)
+                .eq("linked_operation_id", operation_id)
+                .eq("role", "assistant")
+                .execute()
+                .data
+                or []
+            )
+            for mr in msg_rows:
+                payload = mr.get("ui_payload")
+                if isinstance(payload, dict) and isinstance(payload.get("receipts"), list):
+                    changed = False
+                    for r in payload["receipts"]:
+                        if isinstance(r, dict) and str(r.get("operationId") or "") == str(operation_id):
+                            r["status"] = "undone"
+                            r["reversible"] = False
+                            changed = True
+                    if changed:
+                        self.db.table("conversation_messages").update({"ui_payload": payload}).eq(
+                            "id", mr["id"]
+                        ).execute()
+        except Exception:
+            pass
 
         return {
             "reversed": bool(reversed_parts),

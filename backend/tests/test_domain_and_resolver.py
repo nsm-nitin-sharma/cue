@@ -377,6 +377,9 @@ def test_udhaar_payment_settles_sales_and_includes_in_revenue():
         def rpc(self, fn_name, params):
             return _FakeRPC(self.store, fn_name, params)
 
+    from app.core.time_utils import get_business_today
+
+    today_ist = get_business_today("Asia/Kolkata").isoformat()
     store = {
         "customers": [{"id": "c1", "business_id": "b1", "outstanding_balance": 400.0}],
         "sales": [
@@ -387,7 +390,7 @@ def test_udhaar_payment_settles_sales_and_includes_in_revenue():
                 "total_amount": 400.0,
                 "paid_amount": 0.0,
                 "payment_status": "credit",
-                "transaction_date": "2026-11-27",
+                "transaction_date": today_ist,
                 "status": "active",
                 "operation_id": "op-sale-1",
                 "notes": "[UDHAAR] Voice sale",
@@ -405,7 +408,7 @@ def test_udhaar_payment_settles_sales_and_includes_in_revenue():
         customer_id="c1",
         amount=400.0,
         payment_method="upi",
-        transaction_date="2026-11-27",
+        transaction_date=today_ist,
         operation_id="op-pay-1",
     )
     assert res["after_balance"] == 0.0
@@ -771,3 +774,170 @@ def test_damage_correction_parsing_and_ledger_isolation():
         "en",
     )
     assert en_corr == "Updated damage for Nescafe Gold Jars from 2 to 1. Remaining stock: 13."
+
+
+def test_reverse_operation_updates_inventory_for_direct_and_corrected_sales():
+    from app.services.transaction_engine import TransactionEngine
+
+    class _Resp:
+        def __init__(self, data):
+            self.data = data
+
+    class _Tbl:
+        def __init__(self, store, name):
+            self.store = store
+            self.name = name
+            self._act = "select"
+            self._payload = None
+            self._filters = []
+
+        def select(self, *_a, **_k):
+            self._act = "select"
+            return self
+
+        def update(self, payload):
+            self._act = "update"
+            self._payload = payload
+            return self
+
+        def insert(self, payload):
+            self._act = "insert"
+            self._payload = payload
+            return self
+
+        def eq(self, k, v):
+            self._filters.append(("eq", k, v))
+            return self
+
+        def neq(self, k, v):
+            self._filters.append(("neq", k, v))
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            rows = self.store[self.name]
+            if self._act == "insert":
+                row = {"id": f"new-{len(rows) + 1}", **self._payload}
+                rows.append(row)
+                return _Resp([row])
+            matched = []
+            for r in rows:
+                ok = True
+                for kind, k, v in self._filters:
+                    if kind == "eq" and r.get(k) != v:
+                        ok = False
+                    elif kind == "neq" and r.get(k) == v:
+                        ok = False
+                if ok:
+                    matched.append(r)
+            if self._act == "update":
+                for r in matched:
+                    r.update(self._payload)
+            return _Resp(matched)
+
+    class _DB:
+        def __init__(self, store):
+            self.store = store
+
+        def table(self, name):
+            return _Tbl(self.store, name)
+
+    store = {
+        "inventory": [{"business_id": "b1", "product_id": "p1", "current_quantity": 10.0}],
+        "sales": [
+            # Payment-corrected sale s2 (op2) whose parent s1 (op1) had the original movement
+            {
+                "id": "s1",
+                "business_id": "b1",
+                "status": "corrected",
+                "total_amount": 150.0,
+                "paid_amount": 150.0,
+                "operation_id": "op1",
+            },
+            {
+                "id": "s2",
+                "business_id": "b1",
+                "status": "active",
+                "parent_sale_id": "s1",
+                "total_amount": 150.0,
+                "paid_amount": 150.0,
+                "operation_id": "op2",
+            },
+            # Qty-corrected sale s3 (was 10, corrected to 7; movement on op3 still says -10)
+            {
+                "id": "s3",
+                "business_id": "b1",
+                "status": "active",
+                "total_amount": 350.0,
+                "paid_amount": 350.0,
+                "operation_id": "op3",
+            },
+        ],
+        "sale_items": [
+            {"id": "si2", "business_id": "b1", "sale_id": "s2", "product_id": "p1", "quantity": 3.0, "unit": "piece"},
+            {"id": "si3", "business_id": "b1", "sale_id": "s3", "product_id": "p1", "quantity": 7.0, "unit": "piece"},
+        ],
+        "inventory_movements": [
+            {
+                "id": "mv1",
+                "business_id": "b1",
+                "product_id": "p1",
+                "movement_type": "sale",
+                "quantity_delta": -3.0,
+                "unit": "piece",
+                "reference_id": "s1",
+                "operation_id": "op1",
+            },
+            {
+                "id": "mv3",
+                "business_id": "b1",
+                "product_id": "p1",
+                "movement_type": "sale",
+                "quantity_delta": -10.0,
+                "unit": "piece",
+                "reference_id": "s3",
+                "operation_id": "op3",
+            },
+        ],
+        "expenses": [],
+        "customer_payments": [],
+        "voice_transactions": [],
+        "conversation_messages": [],
+    }
+    tx = TransactionEngine(_DB(store))
+
+    # 1. Reversing payment-corrected sale (op2) MUST restore +3 to stock (10 -> 13)
+    res1 = tx.reverse_operation(
+        business_id="b1",
+        user_id="u1",
+        operation_id="op2",
+        reversal_operation_id="rev-op2",
+        transaction_date="2026-11-28",
+    )
+    assert res1["reversed"] is True
+    assert store["inventory"][0]["current_quantity"] == 13.0
+    assert store["sales"][1]["status"] == "voided"
+
+    # 2. Reversing qty-corrected sale (op3) MUST restore +7 (not +10!) -> (13 -> 20)
+    res2 = tx.reverse_operation(
+        business_id="b1",
+        user_id="u1",
+        operation_id="op3",
+        reversal_operation_id="rev-op3",
+        transaction_date="2026-11-28",
+    )
+    assert res2["reversed"] is True
+    assert store["inventory"][0]["current_quantity"] == 20.0
+    assert store["sales"][2]["status"] == "voided"
+
+    # 3. Calling reverse_operation again on op1 must NOT double-restore mv1!
+    res3 = tx.reverse_operation(
+        business_id="b1",
+        user_id="u1",
+        operation_id="op1",
+        reversal_operation_id="rev-op1",
+        transaction_date="2026-11-28",
+    )
+    assert store["inventory"][0]["current_quantity"] == 20.0
